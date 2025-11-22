@@ -1,12 +1,12 @@
 const mongoose = require('mongoose');
 
-// ID Cố định để giữ nguyên khi seed lại
+// ID Cố định để giữ nguyên khi seed lại, giúp Frontend không bị lỗi ID cũ
 const teacherId = new mongoose.Types.ObjectId('654321654321654321654321');
 const studentId = new mongoose.Types.ObjectId('123456123456123456123456');
 
 // Dữ liệu thẻ NFC giả lập
 const mockNfcIds = [
-  '04ADDA40C22A81', // Thẻ của SV chính
+  '04ADDA40C22A81', // Thẻ của SV chính (sv001)
   '04B21643C22A81',
   '04A96740C22A81',
   '04D9B241C22A81',
@@ -23,7 +23,7 @@ const users = [
   },
   {
     _id: studentId,
-    userId: 'sv001', // User trong ảnh
+    userId: 'sv001', // User chính để test
     password: 'password123',
     fullName: 'Nguyễn Văn A',
     role: 'student',
@@ -41,14 +41,59 @@ const users = [
   }))
 ];
 
-// Helper tạo ngày tháng tương đối
-const getDate = (dayOffset, hour = 7, minute = 0) => {
-  const d = new Date();
-  d.setDate(d.getDate() + dayOffset);
-  d.setHours(hour, minute, 0, 0);
-  return d;
+// --- HÀM HỖ TRỢ SINH NGÀY THÁNG ĐỘNG ---
+
+// Lấy ngày bắt đầu của tuần hiện tại (Thứ 2)
+const getStartOfCurrentWeek = () => {
+  const now = new Date();
+  const day = now.getDay(); // 0 (Sun) -> 6 (Sat)
+  const diff = now.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+  const monday = new Date(now.setDate(diff));
+  monday.setHours(0, 0, 0, 0);
+  return monday;
 };
 
+/**
+ * Tạo danh sách 9 buổi học cho 1 môn
+ * @param {number} dayOfWeekIso - 1: Thứ 2, ..., 7: Chủ nhật
+ * @param {number} startHour - Giờ bắt đầu (7 hoặc 12)
+ * @param {string} room - Phòng học
+ * @param {string} shift - Ca học (VD: "7-11")
+ */
+const generateLessons = (dayOfWeekIso, startHour, room, shift) => {
+  const lessons = [];
+  const startOfWeek = getStartOfCurrentWeek();
+  
+  // Offset để tính ra ngày trong tuần mong muốn từ Thứ 2 đầu tuần
+  // Thứ 2 (1) -> offset 0, Thứ 3 (2) -> offset 1...
+  const dayOffset = dayOfWeekIso - 1;
+
+  // Tạo 9 buổi: 4 buổi quá khứ (-4 đến -1), 1 buổi tuần này (0), 4 buổi tương lai (1 đến 4)
+  // Tổng cộng 9 tuần liên tiếp
+  for (let i = -4; i <= 4; i++) {
+    const lessonDate = new Date(startOfWeek);
+    // Cộng thêm số tuần (i * 7) và số ngày lệch trong tuần
+    lessonDate.setDate(lessonDate.getDate() + (i * 7) + dayOffset);
+    lessonDate.setHours(startHour, 0, 0, 0);
+
+    // Xác định trạng thái buổi học
+    // Nếu tuần < 0: Đã học xong (isFinished = true) -> Logic seed sẽ random vắng/có mặt
+    // Nếu tuần >= 0: Chưa học hoặc đang học (isFinished = false) -> Chưa điểm danh
+    const isFinished = i < 0;
+
+    lessons.push({
+      lessonId: `L${i + 5}`, // L1 -> L9
+      date: lessonDate,
+      room: room,
+      shift: shift,
+      isFinished: isFinished
+    });
+  }
+  return lessons;
+};
+
+// --- DỮ LIỆU LỚP HỌC ---
+// Được xếp lịch so le để không trùng lặp cho 1 sinh viên
 const classes = [
   {
     classId: 'MAN104',
@@ -56,14 +101,9 @@ const classes = [
     credits: 3,
     group: '13',
     teacher: teacherId,
-    students: [studentId], // Gán SV vào lớp
-    lessons: [
-      // Khớp với ảnh: Thứ 2, 17/11/2025
-      { lessonId: 'L1', date: new Date('2025-11-10T07:00:00'), room: 'E1-09.08', shift: '7-11', isFinished: true },
-      { lessonId: 'L2', date: new Date('2025-11-17T07:00:00'), room: 'E1-09.08', shift: '7-11', isFinished: false },
-      { lessonId: 'L3', date: new Date('2025-11-24T07:00:00'), room: 'E1-09.08', shift: '7-11', isFinished: false },
-      { lessonId: 'L4', date: new Date('2025-12-01T07:00:00'), room: 'E1-09.08', shift: '7-11', isFinished: false }
-    ]
+    students: [studentId],
+    // Lịch: Thứ 2 hàng tuần, Sáng (7h)
+    lessons: generateLessons(1, 7, 'E1-09.08', '7-11')
   },
   {
     classId: 'COS141',
@@ -72,12 +112,8 @@ const classes = [
     group: '01',
     teacher: teacherId,
     students: [studentId],
-    lessons: [
-      // Khớp với ảnh: Thứ 3, 18/11/2025
-      { lessonId: 'L1', date: new Date('2025-11-11T12:30:00'), room: 'E1-09.05', shift: '2-6', isFinished: true },
-      { lessonId: 'L2', date: new Date('2025-11-18T12:30:00'), room: 'E1-09.05', shift: '2-6', isFinished: false },
-      { lessonId: 'L3', date: new Date('2025-11-25T12:30:00'), room: 'E1-09.05', shift: '2-6', isFinished: false }
-    ]
+    // Lịch: Thứ 3 hàng tuần, Chiều (12h30)
+    lessons: generateLessons(2, 12, 'E1-09.05', '2-6') // 12h thực ra là 12h30 logic hiển thị
   },
   {
     classId: 'CAP126',
@@ -86,29 +122,19 @@ const classes = [
     group: '01',
     teacher: teacherId,
     students: [studentId],
-    lessons: [
-      { lessonId: 'L1', date: new Date('2025-09-04T12:30:00'), room: 'B1-10.01', shift: '2-6', isFinished: true },
-      { lessonId: 'L2', date: new Date('2025-09-11T12:30:00'), room: 'B1-10.01', shift: '2-6', isFinished: true },
-      { lessonId: 'L3', date: new Date('2025-09-18T12:30:00'), room: 'B1-10.01', shift: '2-6', isFinished: true },
-      { lessonId: 'L4', date: new Date('2025-09-25T12:30:00'), room: 'B1-10.01', shift: '2-6', isFinished: true },
-      { lessonId: 'L5', date: new Date('2025-10-02T12:30:00'), room: 'B1-10.01', shift: '2-6', isFinished: true },
-      { lessonId: 'L6', date: new Date('2025-10-09T12:30:00'), room: 'B1-10.01', shift: '2-6', isFinished: true },
-      { lessonId: 'L7', date: new Date('2025-10-16T12:30:00'), room: 'B1-10.01', shift: '2-6', isFinished: false },
-    ]
+    // Lịch: Thứ 4 hàng tuần, Sáng (7h)
+    lessons: generateLessons(3, 7, 'B1-10.01', '7-11')
   },
   {
     classId: 'CMP436',
-    className: 'Đồ án chuyên ngành Công nghệ thông tin',
+    className: 'Đồ án chuyên ngành CNTT',
     credits: 3,
-    group: '14 Tổ: 05',
+    group: '14',
     teacher: teacherId,
     students: [studentId],
-    lessons: [
-      { lessonId: 'L1', date: new Date('2025-11-15T07:00:00'), room: 'Online', shift: '7-11', isFinished: true }
-    ]
+    // Lịch: Thứ 5 hàng tuần, Chiều (12h30)
+    lessons: generateLessons(4, 12, 'Online', '2-6')
   }
 ];
 
 module.exports = { users, classes };
-
-
