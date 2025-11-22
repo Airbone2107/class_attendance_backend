@@ -1,0 +1,21 @@
+# Dependencies
+node_modules
+
+# Environment Variables - DO NOT COMMIT
+.env
+.env.test
+
+# Test Reports
+/html-report
+test-report.txt
+
+# Logs
+npm-debug.log*
+
+# IDE specific
+.vscode/
+.idea/
+
+# OS specific
+.DS_Store
+Thumbs.db
