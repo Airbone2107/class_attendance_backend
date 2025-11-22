@@ -8,11 +8,11 @@ const classId2 = 'IT002';
 // 5 Thẻ NFC giả lập (Giữ 5 thẻ còn lại làm backup)
 // HÃY THAY THẾ CÁC CHUỖI NÀY BẰNG ID THẺ THẬT (HEX STRING) CỦA BẠN
 const mockNfcIds = [
-  'CARD01_HEX_ID',
-  'CARD02_HEX_ID',
-  'CARD03_HEX_ID',
-  'CARD04_HEX_ID',
-  'CARD05_HEX_ID'
+  '04ADDA40C22A81',
+  '04B21643C22A81',
+  '04A96740C22A81',
+  '04D9B241C22A81',
+  '04689842C22A81'
 ];
 
 const users = [
