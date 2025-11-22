@@ -8,7 +8,8 @@ const userSchema = new Schema({
   fullName: { type: String, required: true },
   role: { type: String, enum: ['student', 'teacher'], required: true },
   nfcId: { type: String, unique: true, sparse: true }, // Chỉ sinh viên mới có, sparse cho phép nhiều document null
-  faceVector: { type: String } // Giả lập vector khuôn mặt
+  // CẬP NHẬT: Lưu vector đặc trưng khuôn mặt (128 hoặc 512 chiều tùy model)
+  faceEmbedding: { type: [Number], default: [] }
 }, { timestamps: true }); // Thêm createdAt và updatedAt tự động
 
 module.exports = mongoose.model('User', userSchema);
