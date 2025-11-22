@@ -1,10 +1,11 @@
-// Project001/routes/attendanceRoutes.js
 const express = require('express');
 const router = express.Router();
-const { checkIn } = require('../controllers/attendanceController');
+const { checkIn, getStudentClasses, getStudentClassHistory } = require('../controllers/attendanceController');
 const { protect } = require('../middleware/authMiddleware');
 
-// Chỉ sinh viên (đã đăng nhập) mới có thể điểm danh
+// Các route dành cho sinh viên
 router.post('/check-in', protect, checkIn);
+router.get('/classes', protect, getStudentClasses);
+router.get('/history/:classId', protect, getStudentClassHistory);
 
 module.exports = router;

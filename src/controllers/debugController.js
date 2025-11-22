@@ -1,6 +1,7 @@
 const User = require('../models/user.model');
 const Class = require('../models/class.model');
 const Session = require('../models/session.model');
+const AttendanceRecord = require('../models/attendanceRecord.model');
 const { users, classes } = require('../data/mockData');
 const bcrypt = require('bcryptjs');
 
@@ -11,7 +12,7 @@ const resetDb = async (req, res) => {
     await User.deleteMany({});
     await Class.deleteMany({});
     await Session.deleteMany({});
-    // Nếu có collection AttendanceRecords thì xóa luôn ở đây
+    await AttendanceRecord.deleteMany({});
 
     res.status(200).json({ message: 'Database cleared successfully.' });
   } catch (error) {
@@ -28,6 +29,7 @@ const seedDb = async (req, res) => {
     await User.deleteMany({});
     await Class.deleteMany({});
     await Session.deleteMany({});
+    await AttendanceRecord.deleteMany({});
 
     // 2. Hash password cho users
     const salt = await bcrypt.genSalt(10);
@@ -39,26 +41,28 @@ const seedDb = async (req, res) => {
     // 3. Tạo Users
     const createdUsers = await User.insertMany(hashedUsers);
 
-    // 4. Lấy danh sách ID sinh viên vừa tạo để gán vào lớp
-    const studentIds = createdUsers
-      .filter((u) => u.role === 'student')
-      .map((u) => u._id);
+    // 4. Map lại ID user thật (để đảm bảo logic ref của mongoose hoạt động đúng)
+    // Lấy user gv001
+    const teacher = createdUsers.find(u => u.userId === 'gv001');
+    // Lấy danh sách tất cả sinh viên
+    const students = createdUsers.filter(u => u.role === 'student').map(u => u._id);
 
-    // 5. Cập nhật danh sách sinh viên cho các lớp
-    const classesWithStudents = classes.map((cls) => ({
+    // 5. Cập nhật Classes với ID thật
+    const finalClasses = classes.map((cls) => ({
       ...cls,
-      students: studentIds
+      teacher: teacher._id,
+      students: students // Gán tất cả sinh viên mock vào lớp để dễ test
     }));
 
     // 6. Tạo Classes
-    await Class.insertMany(classesWithStudents);
+    await Class.insertMany(finalClasses);
 
     res.status(201).json({
       message: 'Database seeded successfully.',
       summary: {
         users: createdUsers.length,
-        classes: classes.length,
-        students_per_class: studentIds.length
+        classes: finalClasses.length,
+        students_per_class: students.length
       }
     });
   } catch (error) {

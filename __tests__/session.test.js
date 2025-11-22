@@ -29,11 +29,22 @@ describe('Session API: /api/sessions/create', () => {
         nfcId: 'NFC12345'
       });
 
-    // Tạo lớp học
+    // Tạo lớp học với danh sách lessons (CẬP NHẬT)
     testClass = await Class.create({
         classId: 'IT101',
         className: 'Nhap mon Cong nghe phan mem',
-        teacher: teacher._id
+        teacher: teacher._id,
+        credits: 3,
+        group: '01',
+        lessons: [
+            {
+                lessonId: 'L1',
+                date: new Date(),
+                room: 'A101',
+                shift: '1-3',
+                isFinished: false
+            }
+        ]
     });
 
     // Tạo token
@@ -41,12 +52,13 @@ describe('Session API: /api/sessions/create', () => {
     studentToken = jwt.sign({ id: student._id, role: student.role }, process.env.JWT_SECRET);
   });
   
-  it('Nên tạo session thành công khi giảng viên hợp lệ gửi request', async () => {
+  it('Nên tạo session thành công khi giảng viên hợp lệ gửi request (kèm lessonId)', async () => {
     const res = await request(app)
         .post('/api/sessions/create')
         .set('Authorization', `Bearer ${teacherToken}` )
         .send({
             classId: 'IT101',
+            lessonId: 'L1', // CẬP NHẬT: Thêm lessonId
             level: 1
         });
     
@@ -61,6 +73,7 @@ describe('Session API: /api/sessions/create', () => {
         .set('Authorization', `Bearer ${studentToken}` )
         .send({
             classId: 'IT101',
+            lessonId: 'L1',
             level: 1
         });
     
@@ -72,6 +85,7 @@ describe('Session API: /api/sessions/create', () => {
         .post('/api/sessions/create')
         .send({
             classId: 'IT101',
+            lessonId: 'L1',
             level: 1
         });
     
@@ -84,9 +98,24 @@ describe('Session API: /api/sessions/create', () => {
         .set('Authorization', `Bearer ${teacherToken}` )
         .send({
             classId: 'NONEXISTENT_CLASS',
+            lessonId: 'L1',
             level: 1
         });
     
     expect(res.statusCode).toBe(404);
+  });
+
+  it('Nên trả về lỗi 404 khi lessonId không tồn tại trong lớp', async () => {
+    const res = await request(app)
+        .post('/api/sessions/create')
+        .set('Authorization', `Bearer ${teacherToken}` )
+        .send({
+            classId: 'IT101',
+            lessonId: 'WRONG_LESSON',
+            level: 1
+        });
+    
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toContain('not found in class');
   });
 });

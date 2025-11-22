@@ -1,34 +1,44 @@
 const Session = require('../models/session.model');
 const Class = require('../models/class.model');
+const AttendanceRecord = require('../models/attendanceRecord.model');
 const { randomBytes } = require('crypto');
 
-// @desc    Giảng viên tạo một phiên điểm danh mới
+// @desc    Giảng viên tạo phiên điểm danh cho 1 buổi học cụ thể
 // @route   POST /api/sessions/create
-// @access  Private (Teacher only)
 const createSession = async (req, res) => {
-  // Middleware 'protect' đã xác thực và gán req.user
   if (req.user.role !== 'teacher') {
     return res.status(403).json({ error: 'Only teachers can create sessions.' });
   }
   
-  const { classId, level } = req.body;
-  if (!classId || !level) {
-    return res.status(400).json({ error: 'Please provide classId and level.' });
+  // lessonId là bắt buộc để biết điểm danh cho buổi nào
+  const { classId, lessonId, level } = req.body;
+  if (!classId || !lessonId || !level) {
+    return res.status(400).json({ error: 'Please provide classId, lessonId and level.' });
   }
 
   try {
-    // Kiểm tra xem lớp học có tồn tại không
+    // Kiểm tra lớp học
     const classExists = await Class.findOne({ classId });
     if (!classExists) {
       return res.status(404).json({ error: `Class with ID ${classId} not found.` });
     }
 
-    // Tạo sessionId ngẫu nhiên, an toàn
+    // Kiểm tra xem lessonId có thuộc lớp này không
+    const lessonExists = classExists.lessons.find(l => l.lessonId === lessonId);
+    if (!lessonExists) {
+        return res.status(404).json({ error: `Lesson ${lessonId} not found in class ${classId}.` });
+    }
+
+    // Xóa session cũ của buổi học này nếu có (để tạo lại)
+    await Session.deleteMany({ class: classExists._id, lessonId: lessonId });
+
+    // Tạo sessionId ngẫu nhiên
     const sessionId = randomBytes(4).toString('hex').toUpperCase();
 
     const newSession = new Session({
       sessionId,
       class: classExists._id,
+      lessonId,
       level
     });
 
@@ -38,7 +48,8 @@ const createSession = async (req, res) => {
       message: 'Session created successfully.',
       sessionId: newSession.sessionId,
       level: newSession.level,
-      expiresAt: new Date(newSession.createdAt.getTime() + 2 * 60000) // Thông báo thời gian hết hạn
+      // Trả về thời gian hết hạn để frontend đếm ngược (5 phút)
+      expiresAt: new Date(newSession.createdAt.getTime() + 5 * 60000)
     });
 
   } catch (error) {
@@ -47,4 +58,28 @@ const createSession = async (req, res) => {
   }
 };
 
-module.exports = { createSession };
+// @desc    Lấy thống kê phiên điểm danh (cho màn hình monitor của GV)
+// @route   GET /api/sessions/:sessionId/stats
+const getSessionStats = async (req, res) => {
+    const { sessionId } = req.params;
+    try {
+        const session = await Session.findOne({ sessionId });
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found or expired' });
+        }
+
+        // Đếm số lượng record điểm danh thuộc session này
+        const count = await AttendanceRecord.countDocuments({ session: session._id });
+        
+        res.status(200).json({
+            sessionId,
+            count,
+            expiresAt: new Date(session.createdAt.getTime() + 5 * 60000)
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error fetching stats' });
+    }
+};
+
+module.exports = { createSession, getSessionStats };

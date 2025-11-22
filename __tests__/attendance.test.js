@@ -16,8 +16,25 @@ describe('Attendance API: /api/attendance/check-in', () => {
     const student = await User.create({ userId: 'sv001', password: hashedPassword, fullName: 'Student A', role: 'student', nfcId: 'NFC123' });
     const teacher = await User.create({ userId: 'gv001', password: hashedPassword, fullName: 'Teacher B', role: 'teacher' });
 
-    testClass = await Class.create({ classId: 'CS101', className: 'Test Class', teacher: teacher._id });
-    testSession = await Session.create({ sessionId: 'ABCD', class: testClass._id, level: 2 });
+    // CẬP NHẬT: Thêm lessons vào class
+    testClass = await Class.create({ 
+        classId: 'CS101', 
+        className: 'Test Class', 
+        teacher: teacher._id,
+        credits: 3,
+        group: '01',
+        lessons: [
+            { lessonId: 'L1', date: new Date(), room: 'B1', shift: '1', isFinished: false }
+        ]
+    });
+
+    // CẬP NHẬT: Thêm lessonId vào session
+    testSession = await Session.create({ 
+        sessionId: 'ABCD', 
+        class: testClass._id, 
+        lessonId: 'L1', 
+        level: 2 
+    });
     
     studentToken = jwt.sign({ id: student._id, role: student.role }, process.env.JWT_SECRET);
     teacherToken = jwt.sign({ id: teacher._id, role: teacher.role }, process.env.JWT_SECRET);
@@ -35,6 +52,7 @@ describe('Attendance API: /api/attendance/check-in', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.message).toBe('Check-in successful!');
+    expect(res.body.lessonId).toBe('L1'); // Kiểm tra xem có trả về lessonId không
   });
   
   it('Trả về lỗi 400 nếu NFC ID không khớp', async () => {
