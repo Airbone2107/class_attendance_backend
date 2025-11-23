@@ -5,7 +5,6 @@ const User = require('../models/user.model');
 const Class = require('../models/class.model');
 const AttendanceRecord = require('../models/attendanceRecord.model');
 
-// --- THÊM HÀM NÀY ---
 // Hàm chuẩn hóa L2 (đưa vector về độ dài đơn vị)
 function l2Normalize(vec) {
     if (!vec || !Array.isArray(vec) || vec.length === 0) return vec;
@@ -17,21 +16,27 @@ function l2Normalize(vec) {
     if (magnitude === 0) return vec;
     return vec.map(v => v / magnitude);
 }
-// --------------------
 
-// Hàm tính khoảng cách Euclid giữa 2 vector
-function euclideanDistance(vec1, vec2) {
-    if (vec1.length !== vec2.length) return Infinity;
-    let sum = 0;
+// --- SỬA ĐỔI ---
+// Sử dụng Cosine Similarity thay vì Euclidean Distance để giống Project gốc
+// Cosine Similarity = (A . B) / (||A|| * ||B||)
+// Vì vector đã được L2 Normalize, ||A|| = 1 và ||B|| = 1
+// => Cosine Similarity = A . B (Tích vô hướng)
+function cosineSimilarity(vec1, vec2) {
+    if (vec1.length !== vec2.length) return -1; // Lỗi kích thước
+    
+    let dotProduct = 0;
     for (let i = 0; i < vec1.length; i++) {
-        sum += Math.pow(vec1[i] - vec2[i], 2);
+        dotProduct += vec1[i] * vec2[i];
     }
-    return Math.sqrt(sum);
+    return dotProduct;
 }
 
-// Ngưỡng chấp nhận (Threshold)
-// Sau khi normalize, ngưỡng thường nằm trong khoảng 0.7 - 1.1 tùy model
-const FACE_MATCH_THRESHOLD = 1.0; 
+// Ngưỡng chấp nhận (Threshold) dựa trên Project gốc
+// Project gốc dùng: if (distance > 0.4) recognize (với distance ở đây là Cosine Similarity)
+// Nghĩa là Similarity càng cao càng tốt.
+// 0.4 là mức khá thấp, ta dùng 0.5 để an toàn hơn.
+const COSINE_MATCH_THRESHOLD = 0.4; 
 
 // @desc    Sinh viên thực hiện điểm danh
 // @route   POST /api/attendance/check-in
@@ -40,7 +45,6 @@ const checkIn = async (req, res) => {
     return res.status(403).json({ error: 'Only students can check in.' });
   }
 
-  // faceEmbedding gửi lên từ App là mảng số
   const { sessionId, nfcCardId, faceEmbedding } = req.body; 
   
   if (!sessionId || !nfcCardId) {
@@ -53,7 +57,6 @@ const checkIn = async (req, res) => {
       return res.status(404).json({ error: 'Session not found or has expired.' });
     }
     
-    // Lấy thông tin sinh viên đầy đủ từ DB để có faceEmbedding đã lưu
     const student = await User.findById(req.user._id);
 
     // 1. Xác thực NFC
@@ -71,20 +74,20 @@ const checkIn = async (req, res) => {
          return res.status(400).json({ error: 'Bạn chưa đăng ký khuôn mặt trong Cài đặt.' });
       }
 
-      // --- SỬA ĐỔI TẠI ĐÂY ---
-      // Chuẩn hóa cả 2 vector trước khi so sánh
+      // --- LOGIC SO SÁNH MỚI ---
       const normalizedInput = l2Normalize(faceEmbedding);
       const normalizedStored = l2Normalize(student.faceEmbedding);
 
-      // So sánh vector đã chuẩn hóa
-      const distance = euclideanDistance(normalizedInput, normalizedStored);
-      console.log(`[Face Auth] User: ${student.userId}, Distance: ${distance.toFixed(4)}`);
-      // -----------------------
+      // Tính độ tương đồng Cosine (Range: -1 đến 1)
+      const similarity = cosineSimilarity(normalizedInput, normalizedStored);
+      
+      console.log(`[Face Auth] User: ${student.userId}, Similarity: ${similarity.toFixed(4)}`);
 
-      if (distance > FACE_MATCH_THRESHOLD) {
+      // Cosine Similarity: Càng gần 1 càng giống nhau
+      if (similarity < COSINE_MATCH_THRESHOLD) {
           return res.status(401).json({ 
               error: 'Khuôn mặt không khớp.', 
-              details: `Độ sai lệch: ${distance.toFixed(2)} (Ngưỡng: ${FACE_MATCH_THRESHOLD})` 
+              details: `Độ trùng khớp: ${(similarity * 100).toFixed(1)}% (Yêu cầu > ${COSINE_MATCH_THRESHOLD * 100}%)` 
           });
       }
     }
@@ -124,11 +127,9 @@ const checkIn = async (req, res) => {
 // @route   GET /api/attendance/classes
 const getStudentClasses = async (req, res) => {
     try {
-        // Tìm các lớp mà mảng students có chứa ID user này
         const classes = await Class.find({ students: req.user._id })
             .select('classId className credits group lessons');
         
-        // Map dữ liệu để hiển thị
         const result = classes.map(c => ({
             classId: c.classId,
             className: c.className,
@@ -144,7 +145,7 @@ const getStudentClasses = async (req, res) => {
     }
 };
 
-// @desc    Lấy chi tiết lịch sử điểm danh của 1 lớp (Hiển thị danh sách lesson + status)
+// @desc    Lấy chi tiết lịch sử điểm danh của 1 lớp
 // @route   GET /api/attendance/history/:classId
 const getStudentClassHistory = async (req, res) => {
     const { classId } = req.params;
@@ -154,11 +155,8 @@ const getStudentClassHistory = async (req, res) => {
         const classObj = await Class.findOne({ classId });
         if (!classObj) return res.status(404).json({ error: 'Class not found' });
 
-        // Lấy tất cả record điểm danh của SV này trong lớp này
         const records = await AttendanceRecord.find({ student: studentId, class: classObj._id });
 
-        // Ghép dữ liệu: Duyệt qua danh sách buổi học (lessons) của lớp,
-        // kiểm tra xem có record tương ứng không.
         const result = classObj.lessons.map(lesson => {
             const record = records.find(r => r.lessonId === lesson.lessonId);
             return {
@@ -166,7 +164,6 @@ const getStudentClassHistory = async (req, res) => {
                 date: lesson.date,
                 room: lesson.room,
                 shift: lesson.shift,
-                // Nếu có record thì là 'present', nếu buổi học đã qua (isFinished) mà ko có record là 'absent'
                 status: record ? 'present' : (lesson.isFinished ? 'absent' : 'not_checked')
             };
         });
