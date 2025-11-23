@@ -1,7 +1,23 @@
+// class_attendance_backend/src/controllers/attendanceController.js
+
 const Session = require('../models/session.model');
 const User = require('../models/user.model');
 const Class = require('../models/class.model');
 const AttendanceRecord = require('../models/attendanceRecord.model');
+
+// --- THÊM HÀM NÀY ---
+// Hàm chuẩn hóa L2 (đưa vector về độ dài đơn vị)
+function l2Normalize(vec) {
+    if (!vec || !Array.isArray(vec) || vec.length === 0) return vec;
+    
+    let sum = 0;
+    for (let v of vec) sum += v * v;
+    const magnitude = Math.sqrt(sum);
+    
+    if (magnitude === 0) return vec;
+    return vec.map(v => v / magnitude);
+}
+// --------------------
 
 // Hàm tính khoảng cách Euclid giữa 2 vector
 function euclideanDistance(vec1, vec2) {
@@ -13,8 +29,8 @@ function euclideanDistance(vec1, vec2) {
     return Math.sqrt(sum);
 }
 
-// Ngưỡng chấp nhận (Threshold) - Cần tinh chỉnh tùy model FaceNet
-// Với FaceNet chuẩn, thường là 0.6 đến 1.0 tùy cách normalize
+// Ngưỡng chấp nhận (Threshold)
+// Sau khi normalize, ngưỡng thường nằm trong khoảng 0.7 - 1.1 tùy model
 const FACE_MATCH_THRESHOLD = 1.0; 
 
 // @desc    Sinh viên thực hiện điểm danh
@@ -55,9 +71,15 @@ const checkIn = async (req, res) => {
          return res.status(400).json({ error: 'Bạn chưa đăng ký khuôn mặt trong Cài đặt.' });
       }
 
-      // So sánh vector gửi lên với vector trong DB
-      const distance = euclideanDistance(faceEmbedding, student.faceEmbedding);
-      console.log(`[Face Auth] User: ${student.userId}, Distance: ${distance}`);
+      // --- SỬA ĐỔI TẠI ĐÂY ---
+      // Chuẩn hóa cả 2 vector trước khi so sánh
+      const normalizedInput = l2Normalize(faceEmbedding);
+      const normalizedStored = l2Normalize(student.faceEmbedding);
+
+      // So sánh vector đã chuẩn hóa
+      const distance = euclideanDistance(normalizedInput, normalizedStored);
+      console.log(`[Face Auth] User: ${student.userId}, Distance: ${distance.toFixed(4)}`);
+      // -----------------------
 
       if (distance > FACE_MATCH_THRESHOLD) {
           return res.status(401).json({ 
