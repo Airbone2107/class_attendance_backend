@@ -17,11 +17,14 @@ function l2Normalize(vec) {
     return vec.map(v => v / magnitude);
 }
 
+// Hàm chuẩn hóa ID thẻ để so sánh (In hoa, xóa khoảng trắng)
+function normalizeId(id) {
+    if (!id) return '';
+    return id.toString().trim().toUpperCase().replace(/[^A-Z0-9]/g, ''); // Chỉ giữ lại chữ số và chữ cái
+}
+
 // --- SỬA ĐỔI ---
 // Sử dụng Cosine Similarity thay vì Euclidean Distance để giống Project gốc
-// Cosine Similarity = (A . B) / (||A|| * ||B||)
-// Vì vector đã được L2 Normalize, ||A|| = 1 và ||B|| = 1
-// => Cosine Similarity = A . B (Tích vô hướng)
 function cosineSimilarity(vec1, vec2) {
     if (vec1.length !== vec2.length) return -1; // Lỗi kích thước
     
@@ -32,10 +35,7 @@ function cosineSimilarity(vec1, vec2) {
     return dotProduct;
 }
 
-// Ngưỡng chấp nhận (Threshold) dựa trên Project gốc
-// Project gốc dùng: if (distance > 0.4) recognize (với distance ở đây là Cosine Similarity)
-// Nghĩa là Similarity càng cao càng tốt.
-// 0.4 là mức khá thấp, ta dùng 0.5 để an toàn hơn.
+// Ngưỡng chấp nhận (Threshold)
 const COSINE_MATCH_THRESHOLD = 0.4; 
 
 // @desc    Sinh viên thực hiện điểm danh
@@ -59,9 +59,25 @@ const checkIn = async (req, res) => {
     
     const student = await User.findById(req.user._id);
 
-    // 1. Xác thực NFC
-    if (student.nfcId !== nfcCardId) {
-      return res.status(400).json({ error: 'NFC Card ID does not match.' });
+    // --- DEBUG LOG START ---
+    const dbNfcId = normalizeId(student.nfcId);
+    const inputNfcId = normalizeId(nfcCardId);
+
+    console.log('--- CHECK-IN ATTEMPT ---');
+    console.log(`User: ${student.fullName} (${student.userId})`);
+    console.log(`Stored NFC in DB: '${dbNfcId}'`);
+    console.log(`Scanned NFC     : '${inputNfcId}'`);
+    console.log(`Match Result    : ${dbNfcId === inputNfcId}`);
+    console.log('------------------------');
+    // --- DEBUG LOG END ---
+
+    // 1. Xác thực NFC (So sánh chuỗi đã chuẩn hóa)
+    if (!dbNfcId) {
+        return res.status(400).json({ error: 'Tài khoản của bạn chưa được liên kết với thẻ NFC nào trong hệ thống.' });
+    }
+
+    if (dbNfcId !== inputNfcId) {
+      return res.status(400).json({ error: `Thẻ không hợp lệ. Thẻ này không thuộc về tài khoản ${student.userId}.` });
     }
 
     // 2. Xác thực Khuôn mặt (Nếu Level >= 2)
@@ -74,16 +90,13 @@ const checkIn = async (req, res) => {
          return res.status(400).json({ error: 'Bạn chưa đăng ký khuôn mặt trong Cài đặt.' });
       }
 
-      // --- LOGIC SO SÁNH MỚI ---
       const normalizedInput = l2Normalize(faceEmbedding);
       const normalizedStored = l2Normalize(student.faceEmbedding);
 
-      // Tính độ tương đồng Cosine (Range: -1 đến 1)
       const similarity = cosineSimilarity(normalizedInput, normalizedStored);
       
       console.log(`[Face Auth] User: ${student.userId}, Similarity: ${similarity.toFixed(4)}`);
 
-      // Cosine Similarity: Càng gần 1 càng giống nhau
       if (similarity < COSINE_MATCH_THRESHOLD) {
           return res.status(401).json({ 
               error: 'Khuôn mặt không khớp.', 
