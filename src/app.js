@@ -12,18 +12,20 @@ app.use(express.json());
 const authRoutes = require('./routes/authRoutes');
 const sessionRoutes = require('./routes/sessionRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
-const classRoutes = require('./routes/classRoutes'); // <-- THÊM DÒNG NÀY
-const debugRoutes = require('./routes/debugRoutes'); // <-- THÊM DÒNG NÀY
+const classRoutes = require('./routes/classRoutes');
+const examRoutes = require('./routes/examRoutes'); // <-- MỚI
+const debugRoutes = require('./routes/debugRoutes');
 
 app.use('/api', authRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/attendance', attendanceRoutes);
-app.use('/api/classes', classRoutes); // <-- THÊM DÒNG NÀY
-app.use('/api/debug', debugRoutes); // <-- THÊM DÒNG NÀY
+app.use('/api/classes', classRoutes);
+app.use('/api/exams', examRoutes); // <-- MỚI
+app.use('/api/debug', debugRoutes);
 
 // Route mặc định
 app.get('/', (req, res) => {
-  res.send('Welcome to SmartCheck API v2 (MongoDB)');
+  res.send('Welcome to SmartCheck API v2 (MongoDB) with Exam Module');
 });
 
 module.exports = app;

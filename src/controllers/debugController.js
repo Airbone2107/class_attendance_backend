@@ -3,7 +3,8 @@ const User = require('../models/user.model');
 const Class = require('../models/class.model');
 const Session = require('../models/session.model');
 const AttendanceRecord = require('../models/attendanceRecord.model');
-const { users, classes } = require('../data/mockData');
+const Exam = require('../models/exam.model'); // <-- MỚI
+const { users, classes, exams } = require('../data/mockData'); // <-- Lấy exams
 const bcrypt = require('bcryptjs');
 
 // @desc    Xóa sạch Database
@@ -14,6 +15,7 @@ const resetDb = async (req, res) => {
     await Class.deleteMany({});
     await Session.deleteMany({});
     await AttendanceRecord.deleteMany({});
+    await Exam.deleteMany({}); // <-- MỚI
 
     res.status(200).json({ message: 'Database cleared successfully.' });
   } catch (error) {
@@ -31,6 +33,7 @@ const seedDb = async (req, res) => {
     await Class.deleteMany({});
     await Session.deleteMany({});
     await AttendanceRecord.deleteMany({});
+    await Exam.deleteMany({});
 
     // 2. Hash password cho users
     const salt = await bcrypt.genSalt(10);
@@ -47,66 +50,53 @@ const seedDb = async (req, res) => {
     const studentA = createdUsers.find(u => u.userId === 'sv001'); // SV chính
     const allStudents = createdUsers.filter(u => u.role === 'student').map(u => u._id);
 
-    // 5. Chuẩn bị dữ liệu Classes và AttendanceRecords
-    const finalClasses = [];
-    const attendanceRecords = [];
-
-    for (const clsData of classes) {
-      // Gán ID thật
-      const classObj = {
-        ...clsData,
-        teacher: teacher._id,
-        students: allStudents 
-      };
-      
-      // Tạo Class Document để lấy _id trước (cần cho AttendanceRecord)
-      // Lưu ý: insertMany sẽ trả về documents có _id
-    }
+    // 5. Chuẩn bị dữ liệu Classes và Exams
     
-    // Insert Classes trước để có _id thật
+    // Insert Classes
     const insertedClasses = await Class.insertMany(classes.map(c => ({
         ...c,
         teacher: teacher._id,
         students: allStudents
     })));
 
-    // 6. Tạo dữ liệu điểm danh ngẫu nhiên cho các buổi học ĐÃ KẾT THÚC (isFinished = true)
-    // Chỉ tạo cho sinh viên chính (sv001) để dễ demo
+    // Insert Exams (MỚI)
+    const insertedExams = await Exam.insertMany(exams.map(e => ({
+        ...e,
+        supervisor: teacher._id,
+        students: [studentA._id] // Mock: Chỉ SV chính được thi
+    })));
+
+    // 6. Tạo dữ liệu điểm danh ngẫu nhiên cho các buổi học cũ
+    const attendanceRecords = [];
     for (const cls of insertedClasses) {
         for (const lesson of cls.lessons) {
             if (lesson.isFinished) {
-                // Random: 70% cơ hội là có mặt (tạo record), 30% là vắng (không tạo record)
                 const isPresent = Math.random() > 0.3;
-                
                 if (isPresent) {
                     attendanceRecords.push({
                         student: studentA._id,
                         class: cls._id,
                         lessonId: lesson.lessonId,
                         status: 'present',
-                        method: Math.random() > 0.5 ? 'qr' : 'nfc', // Random method
-                        checkInTime: new Date(lesson.date.getTime() + 15 * 60000) // Check in sau 15p
+                        method: Math.random() > 0.5 ? 'qr' : 'nfc',
+                        checkInTime: new Date(lesson.date.getTime() + 15 * 60000)
                     });
                 }
-                // Nếu vắng (absent) thì KHÔNG tạo record nào cả. 
-                // Logic frontend/backend khi query history sẽ tự hiểu: 
-                // Lesson đã qua (isFinished) + Không có record = Vắng.
             }
         }
     }
 
-    // 7. Insert Attendance Records
     if (attendanceRecords.length > 0) {
         await AttendanceRecord.insertMany(attendanceRecords);
     }
 
     res.status(201).json({
-      message: 'Database seeded successfully with dynamic dates.',
+      message: 'Database seeded successfully with Exams.',
       summary: {
         users: createdUsers.length,
         classes: insertedClasses.length,
-        attendance_records_created: attendanceRecords.length,
-        note: "Lessons before today are randomly marked present/absent."
+        exams: insertedExams.length, // <-- Report
+        attendance_records: attendanceRecords.length
       }
     });
   } catch (error) {

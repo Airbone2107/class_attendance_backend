@@ -3,11 +3,17 @@ const Schema = mongoose.Schema;
 
 const sessionSchema = new Schema({
   sessionId: { type: String, required: true, unique: true },
+  type: { type: String, enum: ['class', 'exam'], default: 'class' }, // Loại phiên
+  
+  // Dành cho lớp học
   class: { type: Schema.Types.ObjectId, ref: 'Class' },
-  lessonId: { type: String, required: true }, // Quan trọng: Phiên này thuộc buổi học nào
+  lessonId: { type: String }, 
+
+  // Dành cho buổi thi (Mới)
+  exam: { type: Schema.Types.ObjectId, ref: 'Exam' },
+
   level: { type: Number, required: true, enum: [1, 2, 3] },
   active: { type: Boolean, default: true },
-  // Tự động xóa document sau 5 phút
   createdAt: { type: Date, expires: '5m', default: Date.now }
 });
 
