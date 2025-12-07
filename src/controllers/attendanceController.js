@@ -3,29 +3,24 @@
 const Session = require('../models/session.model');
 const User = require('../models/user.model');
 const Class = require('../models/class.model');
-const Exam = require('../models/exam.model'); // Import mới
+const Exam = require('../models/exam.model'); 
 const AttendanceRecord = require('../models/attendanceRecord.model');
 
-// ... Giữ nguyên các hàm helper (l2Normalize, normalizeId, cosineSimilarity, validateNfc) ...
-// Hàm chuẩn hóa L2 (đưa vector về độ dài đơn vị)
+// ... (Giữ nguyên các hàm helper: l2Normalize, normalizeId, cosineSimilarity, validateNfc) ...
 function l2Normalize(vec) {
     if (!vec || !Array.isArray(vec) || vec.length === 0) return vec;
-    
     let sum = 0;
     for (let v of vec) sum += v * v;
     const magnitude = Math.sqrt(sum);
-    
     if (magnitude === 0) return vec;
     return vec.map(v => v / magnitude);
 }
 
-// Hàm chuẩn hóa ID thẻ để so sánh (In hoa, xóa khoảng trắng, xóa dấu :)
 function normalizeId(id) {
     if (!id) return '';
     return id.toString().trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
-// Sử dụng Cosine Similarity
 function cosineSimilarity(vec1, vec2) {
     if (vec1.length !== vec2.length) return -1;
     let dotProduct = 0;
@@ -37,9 +32,6 @@ function cosineSimilarity(vec1, vec2) {
 
 const COSINE_MATCH_THRESHOLD = 0.4; 
 
-// --- API MỚI: Chỉ kiểm tra thẻ NFC ---
-// @desc    Kiểm tra thẻ NFC có hợp lệ không trước khi chuyển bước
-// @route   POST /api/attendance/validate-nfc
 const validateNfc = async (req, res) => {
     try {
         const { nfcCardId } = req.body;
@@ -66,8 +58,6 @@ const validateNfc = async (req, res) => {
     }
 };
 
-// @desc    Sinh viên thực hiện điểm danh (Final Submit)
-// @route   POST /api/attendance/check-in
 const checkIn = async (req, res) => {
   if (req.user.role !== 'student') {
     return res.status(403).json({ error: 'Only students can check in.' });
@@ -80,7 +70,6 @@ const checkIn = async (req, res) => {
   }
 
   try {
-    // Populate cả class và exam để biết là loại nào
     const session = await Session.findOne({ sessionId })
         .populate('class')
         .populate('exam');
@@ -99,7 +88,7 @@ const checkIn = async (req, res) => {
       return res.status(400).json({ error: 'NFC Card ID does not match.' });
     }
 
-    // 2. Validate Face (Level >= 2) - Buổi thi luôn là Level 3 nên luôn chạy cái này
+    // 2. Validate Face (Level >= 2)
     if (session.level >= 2) {
       if (!faceEmbedding || !Array.isArray(faceEmbedding)) {
         return res.status(400).json({ error: 'Face data is required for this level.' });
@@ -122,7 +111,7 @@ const checkIn = async (req, res) => {
       }
     }
 
-    // 3. Ghi nhận kết quả (Phân loại Class hay Exam)
+    // 3. Ghi nhận kết quả
     const recordData = {
         student: student._id,
         session: session._id,
@@ -134,8 +123,6 @@ const checkIn = async (req, res) => {
     let filter = {};
 
     if (session.type === 'exam' && session.exam) {
-        // --- LOGIC CHO BUỔI THI ---
-        // Kiểm tra sinh viên có trong danh sách thi không
         const isEligible = session.exam.students.some(s => s.equals(student._id));
         if (!isEligible) {
             return res.status(403).json({ error: 'Bạn không có tên trong danh sách thi này.' });
@@ -144,7 +131,6 @@ const checkIn = async (req, res) => {
         filter = { student: student._id, exam: session.exam._id };
         recordData.exam = session.exam._id;
     } else if (session.class) {
-        // --- LOGIC CHO LỚP HỌC ---
         filter = { student: student._id, class: session.class._id, lessonId: session.lessonId };
         recordData.class = session.class._id;
         recordData.lessonId = session.lessonId;
@@ -167,19 +153,17 @@ const checkIn = async (req, res) => {
   }
 };
 
-// ... Giữ nguyên getStudentClasses, getStudentClassHistory ...
-// @desc    Lấy danh sách các lớp mà sinh viên đang học
-// @route   GET /api/attendance/classes
 const getStudentClasses = async (req, res) => {
     try {
         const classes = await Class.find({ students: req.user._id })
-            .select('classId className credits group lessons');
+            .select('classId className credits group lessons'); // Đã select lessons
         
         const result = classes.map(c => ({
             classId: c.classId,
             className: c.className,
             credits: c.credits,
             group: c.group,
+            lessons: c.lessons, // <-- QUAN TRỌNG: Phải trả về danh sách lessons thì Frontend mới render được TKB
             totalLessons: c.lessons.length
         }));
 
@@ -190,8 +174,7 @@ const getStudentClasses = async (req, res) => {
     }
 };
 
-// @desc    Lấy chi tiết lịch sử điểm danh của 1 lớp
-// @route   GET /api/attendance/history/:classId
+// ... (Giữ nguyên getStudentClassHistory) ...
 const getStudentClassHistory = async (req, res) => {
     const { classId } = req.params;
     const studentId = req.user._id;
@@ -209,7 +192,8 @@ const getStudentClassHistory = async (req, res) => {
                 date: lesson.date,
                 room: lesson.room,
                 shift: lesson.shift,
-                status: record ? 'present' : (lesson.isFinished ? 'absent' : 'not_checked')
+                status: record ? 'present' : (lesson.isFinished ? 'absent' : 'not_checked'),
+                isFinished: lesson.isFinished // Bổ sung để Frontend dùng
             };
         });
 
