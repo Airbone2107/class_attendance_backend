@@ -28,7 +28,7 @@ const users = [
     fullName: 'Nguyễn Văn A',
     role: 'student',
     nfcId: mockNfcIds[0],
-    faceVector: 'mock_face_data'
+    faceEmbedding: [] 
   },
   ...mockNfcIds.slice(1).map((nfcId, index) => ({
     userId: `sv0${index + 2}`,
@@ -36,7 +36,7 @@ const users = [
     fullName: `Sinh Viên Test ${index + 2}`,
     role: 'student',
     nfcId,
-    faceVector: 'mock_face_data'
+    faceEmbedding: [] 
   }))
 ];
 
