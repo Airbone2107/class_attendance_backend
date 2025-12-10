@@ -19,8 +19,19 @@ const attendanceRecordSchema = new Schema({
   checkInTime: { type: Date, default: Date.now }
 }, { timestamps: true });
 
-// Index mới: Đảm bảo sinh viên chỉ điểm danh 1 lần cho 1 lesson HOẶC 1 exam
-attendanceRecordSchema.index({ student: 1, class: 1, lessonId: 1 }, { unique: true, sparse: true });
-attendanceRecordSchema.index({ student: 1, exam: 1 }, { unique: true, sparse: true });
+// CẬP NHẬT: Sử dụng partialFilterExpression để tránh lỗi duplicate key khi trường đó là null
+// Index cũ (sparse: true) vẫn đánh index nếu có field student, dẫn đến trùng lặp (student + null)
+
+// 1. Đảm bảo sinh viên chỉ điểm danh 1 lần cho 1 lesson (Chỉ khi có class)
+attendanceRecordSchema.index(
+    { student: 1, class: 1, lessonId: 1 }, 
+    { unique: true, partialFilterExpression: { class: { $exists: true } } }
+);
+
+// 2. Đảm bảo sinh viên chỉ điểm danh 1 lần cho 1 exam (Chỉ khi có exam)
+attendanceRecordSchema.index(
+    { student: 1, exam: 1 }, 
+    { unique: true, partialFilterExpression: { exam: { $exists: true } } }
+);
 
 module.exports = mongoose.model('AttendanceRecord', attendanceRecordSchema);

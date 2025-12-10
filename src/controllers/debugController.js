@@ -3,8 +3,8 @@ const User = require('../models/user.model');
 const Class = require('../models/class.model');
 const Session = require('../models/session.model');
 const AttendanceRecord = require('../models/attendanceRecord.model');
-const Exam = require('../models/exam.model'); // <-- MỚI
-const { users, classes, exams } = require('../data/mockData'); // <-- Lấy exams
+const Exam = require('../models/exam.model'); 
+const { users, classes, exams } = require('../data/mockData'); 
 const bcrypt = require('bcryptjs');
 
 // @desc    Xóa sạch Database
@@ -15,7 +15,10 @@ const resetDb = async (req, res) => {
     await Class.deleteMany({});
     await Session.deleteMany({});
     await AttendanceRecord.deleteMany({});
-    await Exam.deleteMany({}); // <-- MỚI
+    await Exam.deleteMany({});
+
+    // CẬP NHẬT: Đồng bộ lại Index để xóa index lỗi cũ
+    await AttendanceRecord.syncIndexes();
 
     res.status(200).json({ message: 'Database cleared successfully.' });
   } catch (error) {
@@ -34,6 +37,9 @@ const seedDb = async (req, res) => {
     await Session.deleteMany({});
     await AttendanceRecord.deleteMany({});
     await Exam.deleteMany({});
+
+    // CẬP NHẬT: Đồng bộ index trước khi insert
+    await AttendanceRecord.syncIndexes();
 
     // 2. Hash password cho users
     const salt = await bcrypt.genSalt(10);
@@ -59,7 +65,7 @@ const seedDb = async (req, res) => {
         students: allStudents
     })));
 
-    // Insert Exams (MỚI)
+    // Insert Exams
     const insertedExams = await Exam.insertMany(exams.map(e => ({
         ...e,
         supervisor: teacher._id,
@@ -95,7 +101,7 @@ const seedDb = async (req, res) => {
       summary: {
         users: createdUsers.length,
         classes: insertedClasses.length,
-        exams: insertedExams.length, // <-- Report
+        exams: insertedExams.length, 
         attendance_records: attendanceRecords.length
       }
     });
