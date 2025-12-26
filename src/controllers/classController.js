@@ -15,13 +15,13 @@ const getTeacherClasses = async (req, res) => {
 
     const classIds = classes.map(c => c._id);
 
-    // 1. Tìm Active Sessions
-    const sessions = await Session.find({ class: { $in: classIds } })
-        .sort({ createdAt: -1 })
-        .lean();
+    // 1. Tìm Active Sessions (Session CHƯA hết hạn VÀ active=true)
+    const activeSessions = await Session.find({ 
+        class: { $in: classIds },
+        active: true // BẮT BUỘC
+    }).lean();
 
-    // 2. Kiểm tra xem buổi học đã có dữ liệu trong AttendanceResult chưa
-    // (Aggregate để lấy danh sách các cặp class-lessonId đã có data)
+    // 2. Kiểm tra lịch sử
     const resultCounts = await AttendanceResult.aggregate([
         { $match: { class: { $in: classIds } } },
         { $group: { _id: { class: "$class", lessonId: "$lessonId" } } }
@@ -31,27 +31,37 @@ const getTeacherClasses = async (req, res) => {
         resultCounts.map(r => `${r._id.class.toString()}_${r._id.lessonId}`)
     );
 
-    // 3. Map dữ liệu
     const result = classes.map(cls => {
         const classIdStr = cls._id.toString(); 
 
         const enrichedLessons = cls.lessons.map(lesson => {
             const lessonIdStr = lesson.lessonId.toString();
             
-            // Tìm session active
-            const activeSession = sessions.find(s => {
+            // Tìm session ĐANG HOẠT ĐỘNG
+            const activeSession = activeSessions.find(s => {
                 const sClassStr = s.class ? s.class.toString() : '';
                 const sLessonStr = s.lessonId ? s.lessonId.toString() : '';
                 return sClassStr === classIdStr && sLessonStr === lessonIdStr;
             });
 
-            // Check xem có data bền vững không
+            // Nếu có session active -> Trả về ID thật -> Frontend hiện nút "Tiếp tục" / "Đang mở"
+            // Nếu không -> Trả về null -> Frontend hiện nút "Điểm danh thêm" (hoặc "Bắt đầu")
+            
             const hasData = resultAvailableMap.has(`${classIdStr}_${lessonIdStr}`);
+            
+            // Logic tạo ID ảo để xem report nếu session đã chết
+            let latestSessionId = null;
+            if (activeSession) {
+                latestSessionId = activeSession.sessionId;
+            } else if (hasData) {
+                latestSessionId = `HISTORY-CLASS-${classIdStr}-${lessonIdStr}`;
+            }
 
             return {
                 ...lesson,
-                latestSessionId: activeSession ? activeSession.sessionId : null,
-                hasData: hasData // Frontend sẽ dùng cờ này để hiện nút "Xem báo cáo"
+                latestSessionId: latestSessionId,
+                activeSessionId: activeSession ? activeSession.sessionId : null, // Trường mới để phân biệt rõ
+                hasData: hasData
             };
         });
 
@@ -65,23 +75,20 @@ const getTeacherClasses = async (req, res) => {
   }
 };
 
-// @desc    Lấy báo cáo chi tiết của một buổi học (Dựa vào AttendanceResult)
-// @route   GET /api/classes/:classId/lessons/:lessonId/report
+// ... (getLessonReport giữ nguyên) ...
 const getLessonReport = async (req, res) => {
+    // ... Copy code cũ của getLessonReport vào đây
     const { classId, lessonId } = req.params;
 
     try {
-        // Tìm Class để lấy danh sách SV gốc
         const classObj = await Class.findOne({ classId }).populate('students', 'userId fullName');
         if (!classObj) return res.status(404).json({ error: 'Lớp học không tồn tại.' });
 
-        // Lấy kết quả từ bảng AttendanceResult (Bền vững)
         const results = await AttendanceResult.find({ 
             class: classObj._id, 
             lessonId: lessonId 
         });
 
-        // Map kết quả
         const report = classObj.students.map(student => {
             const record = results.find(r => r.student.toString() === student._id.toString());
             
@@ -100,11 +107,11 @@ const getLessonReport = async (req, res) => {
         res.status(200).json({
             classId,
             lessonId,
-            mode: 'history', // Đánh dấu là xem lịch sử
+            mode: 'history', 
             total: classObj.students.length,
             present: presentCount,
             absent: absentCount,
-            missing: 0, // Lịch sử thì không tính missing realtime
+            missing: 0, 
             students: report
         });
 
