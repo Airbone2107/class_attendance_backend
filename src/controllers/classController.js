@@ -9,7 +9,7 @@ const getTeacherClasses = async (req, res) => {
   }
 
   try {
-    // 1. Tìm tất cả các lớp của giảng viên này (dùng .lean() để trả về Plain JS Object, dễ chỉnh sửa)
+    // 1. Tìm tất cả các lớp của giảng viên này
     const classes = await Class.find({ teacher: req.user._id }).lean();
 
     if (!classes || classes.length === 0) {
@@ -21,16 +21,16 @@ const getTeacherClasses = async (req, res) => {
 
     // 3. Tìm tất cả Sessions thuộc các lớp này
     const sessions = await Session.find({ class: { $in: classIds } })
-        .sort({ createdAt: -1 }) // Sắp xếp mới nhất lên đầu
+        .sort({ createdAt: -1 }) // Sắp xếp mới nhất lên đầu để lấy phiên gần nhất
         .lean();
 
     // 4. Map session mới nhất vào từng lesson tương ứng
     const result = classes.map(cls => {
         const enrichedLessons = cls.lessons.map(lesson => {
-            // Tìm session đầu tiên (mới nhất do đã sort) khớp classId và lessonId
+            // SỬA LỖI: Chuyển đổi về String để so sánh chính xác ObjectId và String
             const latestSession = sessions.find(s => 
-                s.class.toString() === cls._id.toString() && 
-                s.lessonId === lesson.lessonId
+                String(s.class) === String(cls._id) && 
+                String(s.lessonId) === String(lesson.lessonId)
             );
 
             return {
