@@ -1,7 +1,8 @@
 const Class = require('../models/class.model');
 const Session = require('../models/session.model');
+const AttendanceResult = require('../models/attendanceResult.model');
 
-// @desc    Lấy danh sách lớp học của giảng viên (kèm session mới nhất của từng lesson)
+// @desc    Lấy danh sách lớp học của giảng viên
 // @route   GET /api/classes
 const getTeacherClasses = async (req, res) => {
   if (req.user.role !== 'teacher') {
@@ -9,55 +10,48 @@ const getTeacherClasses = async (req, res) => {
   }
 
   try {
-    // 1. Tìm tất cả các lớp của giảng viên này
     const classes = await Class.find({ teacher: req.user._id }).lean();
+    if (!classes || classes.length === 0) return res.status(200).json([]);
 
-    if (!classes || classes.length === 0) {
-      return res.status(200).json([]);
-    }
-
-    // 2. Lấy danh sách ID của các lớp
     const classIds = classes.map(c => c._id);
 
-    // 3. Tìm tất cả Sessions thuộc các lớp này
+    // 1. Tìm Active Sessions
     const sessions = await Session.find({ class: { $in: classIds } })
-        .sort({ createdAt: -1 }) // Sắp xếp mới nhất lên đầu để lấy phiên gần nhất
+        .sort({ createdAt: -1 })
         .lean();
 
-    // --- DEBUG LOGS (Xem trong Terminal Server) ---
-    console.log(`[DEBUG] Teacher: ${req.user.userId}`);
-    console.log(`[DEBUG] Total Classes found: ${classes.length}`);
-    console.log(`[DEBUG] Total Sessions found in DB for these classes: ${sessions.length}`);
-    if (sessions.length > 0) {
-        console.log('[DEBUG] Sample Session Data:', {
-            id: sessions[0]._id,
-            class: sessions[0].class, // Mong đợi là ObjectId
-            lessonId: sessions[0].lessonId,
-            sessionId: sessions[0].sessionId
-        });
-    }
-    // ----------------------------------------------
+    // 2. Kiểm tra xem buổi học đã có dữ liệu trong AttendanceResult chưa
+    // (Aggregate để lấy danh sách các cặp class-lessonId đã có data)
+    const resultCounts = await AttendanceResult.aggregate([
+        { $match: { class: { $in: classIds } } },
+        { $group: { _id: { class: "$class", lessonId: "$lessonId" } } }
+    ]);
 
-    // 4. Map session mới nhất vào từng lesson tương ứng
+    const resultAvailableMap = new Set(
+        resultCounts.map(r => `${r._id.class.toString()}_${r._id.lessonId}`)
+    );
+
+    // 3. Map dữ liệu
     const result = classes.map(cls => {
-        // Chuyển đổi ID lớp hiện tại sang String chuẩn để so sánh
         const classIdStr = cls._id.toString(); 
 
         const enrichedLessons = cls.lessons.map(lesson => {
             const lessonIdStr = lesson.lessonId.toString();
-
-            // Tìm session khớp classId và lessonId trong danh sách sessions đã lấy
-            const latestSession = sessions.find(s => {
-                // Kiểm tra an toàn và convert sang string
+            
+            // Tìm session active
+            const activeSession = sessions.find(s => {
                 const sClassStr = s.class ? s.class.toString() : '';
                 const sLessonStr = s.lessonId ? s.lessonId.toString() : '';
-                
                 return sClassStr === classIdStr && sLessonStr === lessonIdStr;
             });
 
+            // Check xem có data bền vững không
+            const hasData = resultAvailableMap.has(`${classIdStr}_${lessonIdStr}`);
+
             return {
                 ...lesson,
-                latestSessionId: latestSession ? latestSession.sessionId : null
+                latestSessionId: activeSession ? activeSession.sessionId : null,
+                hasData: hasData // Frontend sẽ dùng cờ này để hiện nút "Xem báo cáo"
             };
         });
 
@@ -71,4 +65,53 @@ const getTeacherClasses = async (req, res) => {
   }
 };
 
-module.exports = { getTeacherClasses };
+// @desc    Lấy báo cáo chi tiết của một buổi học (Dựa vào AttendanceResult)
+// @route   GET /api/classes/:classId/lessons/:lessonId/report
+const getLessonReport = async (req, res) => {
+    const { classId, lessonId } = req.params;
+
+    try {
+        // Tìm Class để lấy danh sách SV gốc
+        const classObj = await Class.findOne({ classId }).populate('students', 'userId fullName');
+        if (!classObj) return res.status(404).json({ error: 'Lớp học không tồn tại.' });
+
+        // Lấy kết quả từ bảng AttendanceResult (Bền vững)
+        const results = await AttendanceResult.find({ 
+            class: classObj._id, 
+            lessonId: lessonId 
+        });
+
+        // Map kết quả
+        const report = classObj.students.map(student => {
+            const record = results.find(r => r.student.toString() === student._id.toString());
+            
+            return {
+                userId: student.userId,
+                fullName: student.fullName,
+                status: record ? record.status : 'absent',
+                checkInTime: record ? record.firstCheckIn : null,
+                checkInCount: record ? record.checkInCount : 0
+            };
+        });
+
+        const presentCount = report.filter(r => r.status === 'present').length;
+        const absentCount = report.filter(r => r.status === 'absent').length;
+
+        res.status(200).json({
+            classId,
+            lessonId,
+            mode: 'history', // Đánh dấu là xem lịch sử
+            total: classObj.students.length,
+            present: presentCount,
+            absent: absentCount,
+            missing: 0, // Lịch sử thì không tính missing realtime
+            students: report
+        });
+
+    } catch (error) {
+        console.error('Error fetching lesson report:', error);
+        res.status(500).json({ error: 'Lỗi lấy báo cáo.' });
+    }
+};
+
+module.exports = { getTeacherClasses, getLessonReport };
