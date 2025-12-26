@@ -6,7 +6,6 @@ const AttendanceRecord = require('../models/attendanceRecord.model');
 
 /**
  * Thuật toán chuẩn hóa Vector (L2 Normalization)
- * Đưa vector về độ dài đơn vị để so sánh hướng.
  */
 function l2Normalize(vec) {
     if (!vec || !Array.isArray(vec) || vec.length === 0) return vec;
@@ -18,8 +17,7 @@ function l2Normalize(vec) {
 }
 
 /**
- * Chuẩn hóa ID thẻ NFC (Hex String)
- * Loại bỏ ký tự lạ và chuyển về in hoa đồng nhất.
+ * Chuẩn hóa ID thẻ NFC
  */
 function normalizeId(id) {
     if (!id) return '';
@@ -27,8 +25,7 @@ function normalizeId(id) {
 }
 
 /**
- * Tính độ tương đồng Cosine (Cosine Similarity)
- * Kết quả từ -1 đến 1. Càng gần 1 thì hai khuôn mặt càng giống nhau.
+ * Tính độ tương đồng Cosine
  */
 function cosineSimilarity(vec1, vec2) {
     if (vec1.length !== vec2.length) return -1;
@@ -39,32 +36,78 @@ function cosineSimilarity(vec1, vec2) {
     return dotProduct;
 }
 
-// Ngưỡng chấp nhận (Threshold): 0.4 được chọn sau quá trình tuning model FaceNet
 const COSINE_MATCH_THRESHOLD = 0.4; 
 
-// API: Validate thẻ NFC (Dùng cho bước pre-check ở Client)
+// Hàm helper để tìm bản ghi điểm danh hiện có
+async function findExistingRecord(studentId, session) {
+    let filter = { student: studentId };
+    if (session.type === 'exam' && session.exam) {
+        filter.exam = session.exam._id;
+    } else if (session.class) {
+        filter.class = session.class._id;
+        filter.lessonId = session.lessonId;
+    }
+    return await AttendanceRecord.findOne(filter);
+}
+
+// --- API MỚI: Chặn ngay bước 1 (Validate Session) ---
+const validateSession = async (req, res) => {
+    try {
+        const { sessionId } = req.body;
+        const studentId = req.user._id;
+
+        const session = await Session.findOne({ sessionId });
+        if (!session) return res.status(404).json({ error: 'Mã phiên không tồn tại hoặc đã hết hạn.' });
+        if (!session.active) return res.status(400).json({ error: 'Phiên điểm danh đã kết thúc.' });
+
+        const existingRecord = await findExistingRecord(studentId, session);
+
+        // LOGIC CHẶN NGHIỆP VỤ
+        if (session.mode === 'standard') {
+            // Chế độ thường/bổ sung: Nếu đã có record -> Báo lỗi để chặn
+            if (existingRecord) {
+                return res.status(400).json({ 
+                    error: 'Bạn đã hoàn thành điểm danh cho buổi này rồi.',
+                    block: true 
+                });
+            }
+        } else if (session.mode === 'reinforced') {
+            // Chế độ tăng cường: Nếu CHƯA có record gốc -> Báo lỗi chặn
+            if (!existingRecord) {
+                return res.status(400).json({ 
+                    error: 'Bạn không có tên trong danh sách điểm danh ban đầu.',
+                    block: true
+                });
+            }
+            // Nếu đã có record và session id TRÙNG với session hiện tại (đã quét tăng cường rồi)
+            if (existingRecord.session && existingRecord.session.toString() === session._id.toString()) {
+                 return res.status(400).json({ 
+                    error: 'Bạn đã hoàn thành lượt điểm danh tăng cường này rồi.',
+                    block: true
+                });
+            }
+        }
+
+        return res.status(200).json({ message: 'Session Valid', level: session.level });
+
+    } catch (error) {
+        console.error('Validate Session Error:', error);
+        res.status(500).json({ error: 'Lỗi kiểm tra phiên.' });
+    }
+};
+
 const validateNfc = async (req, res) => {
     try {
         const { nfcCardId } = req.body;
         const student = await User.findById(req.user._id);
-
         const dbNfcId = normalizeId(student.nfcId);
         const inputNfcId = normalizeId(nfcCardId);
 
-        console.log(`[NFC Check] User: ${student.userId} | Input: ${inputNfcId} vs DB: ${dbNfcId}`);
-
-        if (!dbNfcId) {
-             return res.status(400).json({ error: 'Tài khoản chưa liên kết thẻ NFC.' });
-        }
-
-        if (dbNfcId !== inputNfcId) {
-            return res.status(400).json({ error: 'Thẻ không khớp với tài khoản sinh viên.' });
-        }
+        if (!dbNfcId) return res.status(400).json({ error: 'Tài khoản chưa liên kết thẻ NFC.' });
+        if (dbNfcId !== inputNfcId) return res.status(400).json({ error: 'Thẻ không khớp với tài khoản.' });
 
         return res.status(200).json({ message: 'NFC Valid' });
-
     } catch (error) {
-        console.error('NFC Validation Error:', error);
         res.status(500).json({ error: 'Server error checking NFC.' });
     }
 };
@@ -82,7 +125,6 @@ const checkIn = async (req, res) => {
   }
 
   try {
-    // 1. Kiểm tra phiên điểm danh (Session Integrity)
     const session = await Session.findOne({ sessionId })
         .populate('class')
         .populate('exam');
@@ -93,7 +135,7 @@ const checkIn = async (req, res) => {
     
     const student = await User.findById(req.user._id);
 
-    // 2. Xác thực lớp bảo mật 1: Thẻ vật lý (Hardware ID)
+    // 1. Xác thực thẻ vật lý
     const dbNfcId = normalizeId(student.nfcId);
     const inputNfcId = normalizeId(nfcCardId);
 
@@ -101,8 +143,7 @@ const checkIn = async (req, res) => {
       return res.status(400).json({ error: 'NFC Card ID does not match.' });
     }
 
-    // 3. Xác thực lớp bảo mật 2: Sinh trắc học (Face Recognition)
-    // Chỉ kích hoạt nếu Session Level >= 2
+    // 2. Xác thực Sinh trắc học
     if (session.level >= 2) {
       if (!faceEmbedding || !Array.isArray(faceEmbedding)) {
         return res.status(400).json({ error: 'Face data is required for this level.' });
@@ -111,13 +152,10 @@ const checkIn = async (req, res) => {
          return res.status(400).json({ error: 'Bạn chưa đăng ký khuôn mặt trong Cài đặt.' });
       }
 
-      // So khớp Vector đặc trưng (512 dimensions)
       const normalizedInput = l2Normalize(faceEmbedding);
       const normalizedStored = l2Normalize(student.faceEmbedding);
       const similarity = cosineSimilarity(normalizedInput, normalizedStored);
       
-      console.log(`[Face Auth] User: ${student.userId}, Similarity Score: ${similarity.toFixed(4)}`);
-
       if (similarity < COSINE_MATCH_THRESHOLD) {
           return res.status(401).json({ 
               error: 'Khuôn mặt không khớp.', 
@@ -126,35 +164,38 @@ const checkIn = async (req, res) => {
       }
     }
 
-    // 4. Ghi nhận dữ liệu (Persistence)
+    // 3. Chuẩn bị dữ liệu ghi nhận
     const recordData = {
         student: student._id,
-        session: session._id,
+        session: session._id, // Luôn cập nhật session ID mới nhất
         status: 'present',
-        checkInTime: new Date(),
         method: session.level === 3 ? 'nfc_loc' : (session.level === 2 ? 'qr_face' : 'qr')
     };
 
+    // --- QUAN TRỌNG: XỬ LÝ THỜI GIAN ---
+    // Chỉ cập nhật thời gian nếu là chế độ Standard (Lần đầu hoặc Bổ sung).
+    // Nếu là Reinforced (Tăng cường), KHÔNG cập nhật checkInTime -> Giữ nguyên giờ đến lớp ban đầu.
+    if (session.mode === 'standard') {
+        recordData.checkInTime = new Date();
+    }
+
     let filter = {};
-
-    // Xử lý phân loại: Lớp học vs Kỳ thi
     if (session.type === 'exam' && session.exam) {
+        // Kiểm tra danh sách thi
         const isEligible = session.exam.students.some(s => s.equals(student._id));
-        if (!isEligible) {
-            return res.status(403).json({ error: 'Bạn không có tên trong danh sách thi này.' });
-        }
-
+        if (!isEligible) return res.status(403).json({ error: 'Bạn không có tên trong danh sách thi này.' });
+        
         filter = { student: student._id, exam: session.exam._id };
         recordData.exam = session.exam._id;
     } else if (session.class) {
         filter = { student: student._id, class: session.class._id, lessonId: session.lessonId };
         recordData.class = session.class._id;
         recordData.lessonId = session.lessonId;
-    } else {
-        return res.status(500).json({ error: 'Invalid session data.' });
     }
 
-    // Upsert: Cập nhật nếu đã có, tạo mới nếu chưa (Tránh duplicate)
+    // Upsert: True
+    // - Mode Standard: Tạo mới.
+    // - Mode Reinforced: Cập nhật bản ghi cũ (Session ID thay đổi, checkInTime giữ nguyên).
     await AttendanceRecord.updateOne(filter, recordData, { upsert: true });
 
     res.status(200).json({
@@ -201,7 +242,6 @@ const getStudentClassHistory = async (req, res) => {
 
         const records = await AttendanceRecord.find({ student: studentId, class: classObj._id });
 
-        // Map trạng thái từng buổi học để render lên UI
         const result = classObj.lessons.map(lesson => {
             const record = records.find(r => r.lessonId === lesson.lessonId);
             return {
@@ -226,4 +266,4 @@ const getStudentClassHistory = async (req, res) => {
     }
 };
 
-module.exports = { checkIn, validateNfc, getStudentClasses, getStudentClassHistory };
+module.exports = { checkIn, validateNfc, validateSession, getStudentClasses, getStudentClassHistory };

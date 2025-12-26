@@ -1,51 +1,42 @@
 const Session = require('../models/session.model');
 const Class = require('../models/class.model');
-const Exam = require('../models/exam.model'); // Import mới
+const Exam = require('../models/exam.model');
 const AttendanceRecord = require('../models/attendanceRecord.model');
 const { randomBytes } = require('crypto');
 
-// @desc    Tạo phiên điểm danh (Lớp học hoặc Buổi thi)
+// @desc    Tạo phiên điểm danh
 // @route   POST /api/sessions/create
 const createSession = async (req, res) => {
   if (req.user.role !== 'teacher') {
     return res.status(403).json({ error: 'Only teachers can create sessions.' });
   }
   
-  const { classId, lessonId, examId, level } = req.body;
+  // MỚI: Nhận thêm field mode
+  const { classId, lessonId, examId, level, mode } = req.body;
 
   try {
     let newSessionData = {
         sessionId: randomBytes(4).toString('hex').toUpperCase(),
-        active: true
+        active: true,
+        mode: mode || 'standard' // Mặc định là standard
     };
 
-    // --- TRƯỜNG HỢP 1: ĐIỂM DANH BUỔI THI (Có examId) ---
     if (examId) {
         const exam = await Exam.findOne({ examId });
         if (!exam) return res.status(404).json({ error: 'Không tìm thấy buổi thi.' });
-
         if (exam.supervisor.toString() !== req.user._id.toString()) {
             return res.status(403).json({ error: 'Bạn không phải giám thị buổi thi này.' });
         }
 
-        // Xóa session cũ của exam này
         await Session.deleteMany({ exam: exam._id });
-
         newSessionData.type = 'exam';
         newSessionData.exam = exam._id;
-        // BẮT BUỘC LEVEL 3 CHO BUỔI THI
         newSessionData.level = 3; 
-    } 
-    // --- TRƯỜNG HỢP 2: ĐIỂM DANH LỚP HỌC (Có classId & lessonId) ---
-    else if (classId && lessonId) {
+    } else if (classId && lessonId) {
         const classObj = await Class.findOne({ classId });
         if (!classObj) return res.status(404).json({ error: `Class ${classId} not found.` });
-
-        const lessonExists = classObj.lessons.find(l => l.lessonId === lessonId);
-        if (!lessonExists) return res.status(404).json({ error: `Lesson ${lessonId} not found.` });
-
+        
         await Session.deleteMany({ class: classObj._id, lessonId: lessonId });
-
         newSessionData.type = 'class';
         newSessionData.class = classObj._id;
         newSessionData.lessonId = lessonId;
@@ -58,10 +49,11 @@ const createSession = async (req, res) => {
     await newSession.save();
 
     res.status(201).json({
-      message: newSession.type === 'exam' ? 'Exam session created (Level 3 forced).' : 'Class session created.',
+      message: 'Session created.',
       sessionId: newSession.sessionId,
       level: newSession.level,
       type: newSession.type,
+      mode: newSession.mode, // Trả về mode để Client biết
       expiresAt: new Date(newSession.createdAt.getTime() + 5 * 60000)
     });
 
@@ -71,37 +63,36 @@ const createSession = async (req, res) => {
   }
 };
 
-// @desc    Lấy thống kê phiên điểm danh (cho màn hình monitor của GV)
+// @desc    Lấy thống kê phiên điểm danh
 // @route   GET /api/sessions/:sessionId/stats
 const getSessionStats = async (req, res) => {
     const { sessionId } = req.params;
     try {
         const session = await Session.findOne({ sessionId });
-        if (!session) {
-            return res.status(404).json({ error: 'Session not found or expired' });
-        }
+        if (!session) return res.status(404).json({ error: 'Session not found' });
 
-        // Đếm số lượng record điểm danh thuộc session này
+        // Đếm record trỏ tới session hiện tại (đã tham gia phiên này)
         const count = await AttendanceRecord.countDocuments({ session: session._id });
         
-        // CẬP NHẬT: Lấy danh sách 5 sinh viên mới nhất để hiển thị ticker
         const recentRecords = await AttendanceRecord.find({ session: session._id })
-            .sort({ createdAt: -1 })
+            .sort({ updatedAt: -1 }) // Lấy record mới được update
             .limit(5)
             .populate('student', 'fullName userId');
 
         const recentCheckins = recentRecords.map(r => ({
             name: r.student.fullName,
             userId: r.student.userId,
-            time: r.createdAt
+            // Dùng updatedAt để hiển thị thời gian vừa quét (kể cả khi checkInTime giữ nguyên)
+            time: r.updatedAt 
         }));
 
         res.status(200).json({
             sessionId,
             count,
-            recentCheckins, // <-- Dữ liệu mới cho Ticker
-            expiresAt: new Date(session.createdAt.getTime() + 5 * 60000), // Mặc định +5p logic cũ (logic thực tế nên lấy expiresAt từ DB nếu có lưu)
-            active: session.active
+            recentCheckins,
+            expiresAt: new Date(session.createdAt.getTime() + 5 * 60000), 
+            active: session.active,
+            mode: session.mode
         });
     } catch (error) {
         console.error(error);
@@ -109,21 +100,15 @@ const getSessionStats = async (req, res) => {
     }
 };
 
-// @desc    Gia hạn thêm thời gian phiên (Reset createdAt thành hiện tại hoặc cộng thêm time)
-// @route   POST /api/sessions/:sessionId/extend
+// @desc    Gia hạn thêm thời gian phiên
 const extendSession = async (req, res) => {
     const { sessionId } = req.params;
     try {
         const session = await Session.findOne({ sessionId });
         if (!session) return res.status(404).json({ error: 'Session not found' });
-
-        // Logic đơn giản: Reset createdAt thành hiện tại -> Tự động có thêm 5 phút (theo logic expires mặc định)
-        // Hoặc nếu muốn cộng 1 phút chính xác, cần sửa Model để lưu field expiresAt cụ thể.
-        // Ở đây ta "refresh" session.
         session.createdAt = new Date(); 
         session.active = true;
         await session.save();
-
         res.status(200).json({ 
             message: 'Session extended', 
             expiresAt: new Date(session.createdAt.getTime() + 5 * 60000) 
@@ -134,25 +119,21 @@ const extendSession = async (req, res) => {
 };
 
 // @desc    Kết thúc phiên sớm
-// @route   POST /api/sessions/:sessionId/end
 const endSession = async (req, res) => {
     const { sessionId } = req.params;
     try {
         const session = await Session.findOne({ sessionId });
         if (!session) return res.status(404).json({ error: 'Session not found' });
-
         session.active = false;
-        // Đặt thời gian tạo về quá khứ xa để logic hết hạn tự kích hoạt
         session.createdAt = new Date(Date.now() - 60 * 60000); 
         await session.save();
-
         res.status(200).json({ message: 'Session ended successfully' });
     } catch (error) {
         res.status(500).json({ error: 'Error ending session' });
     }
 };
 
-// @desc    Lấy báo cáo tổng kết sau phiên
+// @desc    Lấy báo cáo tổng kết
 // @route   GET /api/sessions/:sessionId/report
 const getSessionReport = async (req, res) => {
     const { sessionId } = req.params;
@@ -169,37 +150,66 @@ const getSessionReport = async (req, res) => {
 
         if (!session) return res.status(404).json({ error: 'Session not found' });
 
-        // Lấy danh sách tất cả sinh viên được phép (từ Class hoặc Exam)
         let allStudents = [];
+        let query = {};
+
         if (session.type === 'class' && session.class) {
             allStudents = session.class.students;
+            query = { class: session.class._id, lessonId: session.lessonId };
         } else if (session.type === 'exam' && session.exam) {
             allStudents = session.exam.students;
+            query = { exam: session.exam._id };
         }
 
-        // Lấy danh sách đã điểm danh
-        const records = await AttendanceRecord.find({ session: session._id });
-        const presentStudentIds = records.map(r => r.student.toString());
+        // Lấy TẤT CẢ record của buổi học này (bất kể session nào)
+        const allRecords = await AttendanceRecord.find(query);
 
         // Map kết quả
         const report = allStudents.map(student => {
-            const isPresent = presentStudentIds.includes(student._id.toString());
+            const record = allRecords.find(r => r.student.toString() === student._id.toString());
+            
+            let status = 'absent';
+            let checkInTime = null;
+
+            if (record) {
+                if (session.mode === 'reinforced') {
+                    // Logic Tăng cường:
+                    // - Có record VÀ session khớp với session tăng cường => CÓ MẶT (Đã scan cả 2 lần)
+                    // - Có record NHƯNG session KHÁC session tăng cường => THIẾU (Có lần 1, vắng lần 2)
+                    if (record.session && record.session.toString() === session._id.toString()) {
+                        status = 'present';
+                        checkInTime = record.checkInTime; // Giờ gốc
+                    } else {
+                        status = 'missing'; // Trạng thái mới: Thiếu
+                        checkInTime = record.checkInTime; // Vẫn hiện giờ đến lần đầu
+                    }
+                } else {
+                    // Logic Standard: Chỉ cần có record là Có mặt
+                    status = 'present';
+                    checkInTime = record.checkInTime;
+                }
+            }
+
             return {
                 userId: student.userId,
                 fullName: student.fullName,
-                status: isPresent ? 'present' : 'absent',
-                checkInTime: isPresent ? records.find(r => r.student.toString() === student._id.toString()).createdAt : null
+                status: status, // present, missing, absent
+                checkInTime: checkInTime
             };
         });
 
         const total = allStudents.length;
-        const presentCount = records.length;
+        const presentCount = report.filter(r => r.status === 'present').length;
+        const missingCount = report.filter(r => r.status === 'missing').length; // Chỉ dùng cho reinforced
+        const absentCount = report.filter(r => r.status === 'absent').length;
 
         res.status(200).json({
             sessionId,
+            mode: session.mode,
             total,
             present: presentCount,
-            absent: total - presentCount,
+            missing: missingCount,
+            absent: absentCount,
             students: report
         });
 
@@ -213,6 +223,6 @@ module.exports = {
     createSession, 
     getSessionStats, 
     extendSession, 
-    endSession,
+    endSession, 
     getSessionReport 
 };
