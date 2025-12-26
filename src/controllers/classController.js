@@ -18,7 +18,7 @@ const getTeacherClasses = async (req, res) => {
     // 1. Tìm Active Sessions (Session CHƯA hết hạn VÀ active=true)
     const activeSessions = await Session.find({ 
         class: { $in: classIds },
-        active: true // BẮT BUỘC
+        active: true 
     }).lean();
 
     // 2. Kiểm tra lịch sử
@@ -44,12 +44,8 @@ const getTeacherClasses = async (req, res) => {
                 return sClassStr === classIdStr && sLessonStr === lessonIdStr;
             });
 
-            // Nếu có session active -> Trả về ID thật -> Frontend hiện nút "Tiếp tục" / "Đang mở"
-            // Nếu không -> Trả về null -> Frontend hiện nút "Điểm danh thêm" (hoặc "Bắt đầu")
-            
             const hasData = resultAvailableMap.has(`${classIdStr}_${lessonIdStr}`);
             
-            // Logic tạo ID ảo để xem report nếu session đã chết
             let latestSessionId = null;
             if (activeSession) {
                 latestSessionId = activeSession.sessionId;
@@ -60,7 +56,7 @@ const getTeacherClasses = async (req, res) => {
             return {
                 ...lesson,
                 latestSessionId: latestSessionId,
-                activeSessionId: activeSession ? activeSession.sessionId : null, // Trường mới để phân biệt rõ
+                activeSessionId: activeSession ? activeSession.sessionId : null, 
                 hasData: hasData
             };
         });
@@ -75,9 +71,9 @@ const getTeacherClasses = async (req, res) => {
   }
 };
 
-// ... (getLessonReport giữ nguyên) ...
+// @desc    Lấy báo cáo lịch sử (Xem lại sau này)
+// @route   GET /api/classes/:classId/lessons/:lessonId/report
 const getLessonReport = async (req, res) => {
-    // ... Copy code cũ của getLessonReport vào đây
     const { classId, lessonId } = req.params;
 
     try {

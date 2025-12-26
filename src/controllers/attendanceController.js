@@ -2,10 +2,10 @@ const Session = require('../models/session.model');
 const User = require('../models/user.model');
 const Class = require('../models/class.model');
 const Exam = require('../models/exam.model'); 
-const AttendanceRecord = require('../models/attendanceRecord.model'); // Bảng Log
-const AttendanceResult = require('../models/attendanceResult.model'); // Bảng Kết quả (Mới)
+const AttendanceRecord = require('../models/attendanceRecord.model');
+const AttendanceResult = require('../models/attendanceResult.model');
 
-// ... (Giữ nguyên các hàm helper l2Normalize, normalizeId, cosineSimilarity)
+// --- Helper Functions ---
 function l2Normalize(vec) {
     if (!vec || !Array.isArray(vec) || vec.length === 0) return vec;
     let sum = 0;
@@ -31,7 +31,6 @@ function cosineSimilarity(vec1, vec2) {
 
 const COSINE_MATCH_THRESHOLD = 0.4; 
 
-// CẬP NHẬT: Kiểm tra record dựa trên Bảng Kết Quả (AttendanceResult)
 async function findExistingResult(studentId, session) {
     let filter = { student: studentId };
     if (session.type === 'exam' && session.exam) {
@@ -43,11 +42,11 @@ async function findExistingResult(studentId, session) {
     return await AttendanceResult.findOne(filter);
 }
 
-// CẬP NHẬT: Kiểm tra log của phiên hiện tại
 async function findCurrentSessionLog(studentId, sessionId) {
-    // Tìm record log gắn với session cụ thể này
     return await AttendanceRecord.findOne({ student: studentId, session: sessionId });
 }
+
+// --- Controllers ---
 
 const validateSession = async (req, res) => {
     try {
@@ -58,13 +57,9 @@ const validateSession = async (req, res) => {
         if (!session) return res.status(404).json({ error: 'Mã phiên không tồn tại hoặc đã hết hạn.' });
         if (!session.active) return res.status(400).json({ error: 'Phiên điểm danh đã kết thúc.' });
 
-        // 1. Kiểm tra xem đã có kết quả tổng của buổi này chưa
         const existingResult = await findExistingResult(studentId, session);
-        
-        // 2. Kiểm tra xem đã check-in phiên CỤ THỂ này chưa (Log)
         const existingLog = await findCurrentSessionLog(studentId, session._id);
 
-        // Logic chặn:
         if (existingLog) {
              return res.status(400).json({ 
                 error: 'Bạn đã hoàn thành lượt điểm danh này rồi.',
@@ -73,7 +68,6 @@ const validateSession = async (req, res) => {
         }
 
         if (session.mode === 'standard') {
-            // Chế độ thường: Nếu đã có kết quả rồi thì thôi (tránh spam)
             if (existingResult) {
                 return res.status(400).json({ 
                     error: 'Bạn đã có mặt trong buổi học này rồi.',
@@ -81,7 +75,6 @@ const validateSession = async (req, res) => {
                 });
             }
         } else if (session.mode === 'reinforced') {
-            // Chế độ tăng cường: Bắt buộc phải có kết quả từ trước (đã điểm danh lần 1)
             if (!existingResult) {
                 return res.status(400).json({ 
                     error: 'Bạn không có tên trong danh sách điểm danh ban đầu. Không thể tham gia tăng cường.',
@@ -99,7 +92,6 @@ const validateSession = async (req, res) => {
 };
 
 const validateNfc = async (req, res) => {
-    // ... (Giữ nguyên logic cũ) ...
     try {
         const { nfcCardId } = req.body;
         const student = await User.findById(req.user._id);
@@ -135,7 +127,6 @@ const checkIn = async (req, res) => {
       return res.status(404).json({ error: 'Session not found or has expired.' });
     }
     
-    // ... (Logic kiểm tra NFC và Face giữ nguyên) ...
     const student = await User.findById(req.user._id);
     const dbNfcId = normalizeId(student.nfcId);
     const inputNfcId = normalizeId(nfcCardId);
@@ -164,9 +155,6 @@ const checkIn = async (req, res) => {
       }
     }
 
-    // --- CẬP NHẬT LOGIC LƯU DB ---
-
-    // 1. Tạo bản ghi Log (Gắn với Session cụ thể)
     const logData = {
         student: student._id,
         session: session._id, 
@@ -179,11 +167,10 @@ const checkIn = async (req, res) => {
     let resultUpdate = {
         $set: { status: 'present', lastCheckIn: new Date() },
         $inc: { checkInCount: 1 },
-        $setOnInsert: { firstCheckIn: new Date() } // Chỉ set khi tạo mới
+        $setOnInsert: { firstCheckIn: new Date() } 
     };
 
     if (session.type === 'exam' && session.exam) {
-        // Kiểm tra danh sách thi
         const isEligible = session.exam.students.some(s => s.equals(student._id));
         if (!isEligible) return res.status(403).json({ error: 'Bạn không có tên trong danh sách thi này.' });
         
@@ -201,10 +188,7 @@ const checkIn = async (req, res) => {
         resultUpdate.$setOnInsert.lessonId = session.lessonId;
     }
 
-    // Lưu Log (Sẽ báo lỗi nếu đã check-in session này rồi nhờ unique index mới)
     await AttendanceRecord.create(logData);
-
-    // Lưu/Cập nhật Result (Luôn thành công, dùng upsert)
     await AttendanceResult.updateOne(resultQuery, resultUpdate, { upsert: true });
 
     res.status(200).json({
@@ -216,7 +200,6 @@ const checkIn = async (req, res) => {
 
   } catch (error) {
     console.error('Error during check-in:', error);
-    // Xử lý lỗi duplicate key của AttendanceRecord (Log)
     if (error.code === 11000) {
         return res.status(400).json({ error: 'Bạn đã điểm danh phiên này rồi.' });
     }
@@ -225,7 +208,6 @@ const checkIn = async (req, res) => {
 };
 
 const getStudentClasses = async (req, res) => {
-    // ... (Giữ nguyên logic cũ) ...
     try {
         const classes = await Class.find({ students: req.user._id })
             .select('classId className credits group lessons');
@@ -246,7 +228,7 @@ const getStudentClasses = async (req, res) => {
     }
 };
 
-// CẬP NHẬT: Lấy dữ liệu từ bảng AttendanceResult (Bền vững)
+// CẬP NHẬT: Lấy dữ liệu lịch sử cho Sinh viên
 const getStudentClassHistory = async (req, res) => {
     const { classId } = req.params;
     const studentId = req.user._id;
@@ -255,7 +237,6 @@ const getStudentClassHistory = async (req, res) => {
         const classObj = await Class.findOne({ classId });
         if (!classObj) return res.status(404).json({ error: 'Class not found' });
 
-        // Query từ bảng AttendanceResult thay vì AttendanceRecord
         const results = await AttendanceResult.find({ student: studentId, class: classObj._id });
 
         const result = classObj.lessons.map(lesson => {
@@ -264,7 +245,8 @@ const getStudentClassHistory = async (req, res) => {
             let status = 'not_checked';
 
             if (attResult) {
-                status = attResult.status; // 'present'
+                // Lấy trực tiếp status từ DB ('present' hoặc 'absent')
+                status = attResult.status; 
             } else {
                 if (lesson.isFinished) status = 'absent';
             }
@@ -274,7 +256,7 @@ const getStudentClassHistory = async (req, res) => {
                 date: lesson.date,
                 room: lesson.room,
                 shift: lesson.shift,
-                status: status,
+                status: status, 
                 isFinished: lesson.isFinished
             };
         });

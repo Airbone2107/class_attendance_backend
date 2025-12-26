@@ -5,10 +5,8 @@ const AttendanceRecord = require('../models/attendanceRecord.model');
 const AttendanceResult = require('../models/attendanceResult.model'); 
 const { randomBytes } = require('crypto');
 
-// ... (Giữ nguyên createSession, getSessionStats, extendSession) ...
-// Copy lại 3 hàm trên từ code cũ, không thay đổi gì. 
-// Chỉ thay đổi hàm endSession và getSessionReport bên dưới.
-
+// @desc    Tạo phiên điểm danh
+// @route   POST /api/sessions/create
 const createSession = async (req, res) => {
   if (req.user.role !== 'teacher') {
     return res.status(403).json({ error: 'Only teachers can create sessions.' });
@@ -67,6 +65,8 @@ const createSession = async (req, res) => {
   }
 };
 
+// @desc    Lấy thống kê phiên điểm danh
+// @route   GET /api/sessions/:sessionId/stats
 const getSessionStats = async (req, res) => {
     const { sessionId } = req.params;
     try {
@@ -100,6 +100,7 @@ const getSessionStats = async (req, res) => {
     }
 };
 
+// @desc    Gia hạn thêm thời gian phiên
 const extendSession = async (req, res) => {
     const { sessionId } = req.params;
     try {
@@ -117,22 +118,20 @@ const extendSession = async (req, res) => {
     }
 };
 
-// --- LOGIC KẾT THÚC PHIÊN ĐIỂM DANH ---
+// @desc    Kết thúc phiên sớm
+// @note    Đây là nơi xử lý logic chốt sổ "Vắng tăng cường"
 const endSession = async (req, res) => {
     const { sessionId } = req.params;
     try {
         const session = await Session.findOne({ sessionId });
         if (!session) return res.status(404).json({ error: 'Session not found' });
         
-        // 1. Đóng session
+        // 1. Đóng session ngay lập tức
         session.active = false;
-        // Đặt thời gian hết hạn về quá khứ để expire sau 5 phút tính từ bây giờ (hoặc expire ngay lập tức tùy config DB)
-        // Ở đây ta giữ record session thêm 1 lúc nhưng set active=false
-        session.createdAt = new Date(Date.now() - 60 * 60000); 
+        session.createdAt = new Date(Date.now() - 60 * 60000); // Expire
         await session.save();
 
-        // 2. Xử lý Logic Tăng cường (Reinforced)
-        // Nếu là phiên tăng cường => Những ai có trong Result (đã đi học) mà KHÔNG có trong Log của phiên này => Cập nhật thành ABSENT
+        // 2. LOGIC QUAN TRỌNG: Cập nhật DB thành ABSENT (Vắng) nếu mode là reinforced
         if (session.mode === 'reinforced') {
             let filterResult = {};
             if (session.class) {
@@ -141,32 +140,29 @@ const endSession = async (req, res) => {
                 filterResult = { exam: session.exam };
             }
 
-            // Lấy danh sách những người đã được ghi nhận là "Có mặt" trước đó
-            const previousPresents = await AttendanceResult.find({ 
-                ...filterResult, 
-                status: 'present' 
-            });
+            // Lấy tất cả SV đã từng check-in (có trong Result)
+            const existingResults = await AttendanceResult.find(filterResult);
 
-            // Lấy danh sách những người đã quét trong phiên tăng cường này
+            // Lấy danh sách SV đã check-in trong phiên này (Log)
             const currentSessionLogs = await AttendanceRecord.find({ session: session._id });
             const scannedStudentIds = new Set(currentSessionLogs.map(r => r.student.toString()));
 
-            // Tìm những người "rụng" (Có trước đó nhưng không quét lại)
-            const dropOutStudentIds = previousPresents
+            // Tìm những người có Result nhưng KHÔNG có Log phiên này
+            const dropOutStudentIds = existingResults
                 .filter(r => !scannedStudentIds.has(r.student.toString()))
                 .map(r => r.student);
 
             if (dropOutStudentIds.length > 0) {
-                console.log(`[Reinforced Logic] Marking ${dropOutStudentIds.length} students as ABSENT.`);
+                console.log(`[Reinforced Logic] Setting ${dropOutStudentIds.length} students to ABSENT permanently.`);
                 
-                // Cập nhật trạng thái thành Vắng (absent)
+                // Cập nhật trạng thái thành Vắng (absent) vĩnh viễn trong DB
                 await AttendanceResult.updateMany(
                     { 
                         ...filterResult,
                         student: { $in: dropOutStudentIds }
                     },
                     { 
-                        $set: { status: 'absent' } // Quy định: Vắng tăng cường = Vắng luôn
+                        $set: { status: 'absent' } 
                     }
                 );
             }
@@ -179,9 +175,9 @@ const endSession = async (req, res) => {
     }
 };
 
+// @desc    Lấy báo cáo tổng kết
+// @route   GET /api/sessions/:sessionId/report
 const getSessionReport = async (req, res) => {
-    // ... (Giữ nguyên logic getSessionReport đã update ở bước trước) ...
-    // Copy lại nội dung hàm getSessionReport từ response trước
     const { sessionId } = req.params;
     try {
         let session = await Session.findOne({ sessionId })
@@ -194,6 +190,7 @@ const getSessionReport = async (req, res) => {
                 populate: { path: 'students', select: 'userId fullName' }
             });
 
+        // Xử lý ID ảo (History)
         if (!session) {
             if (sessionId.startsWith('HISTORY-')) {
                 const parts = sessionId.split('-'); 
@@ -203,7 +200,6 @@ const getSessionReport = async (req, res) => {
                 if (type === 'CLASS') {
                     const lessonId = parts[3];
                     const classObj = await Class.findById(dbId).populate('students', 'userId fullName');
-                    
                     if (classObj) {
                         session = {
                             _id: null,
@@ -235,6 +231,7 @@ const getSessionReport = async (req, res) => {
 
         let allStudents = [];
         let resultQuery = {};
+        // Chỉ tìm Record Log nếu session là thật (có _id)
         let logQuery = session._id ? { session: session._id } : null;
 
         if (session.type === 'class' && session.class) {
@@ -255,36 +252,27 @@ const getSessionReport = async (req, res) => {
             let status = 'absent';
             let checkInTime = null;
 
-            // Nếu đang xem report của session Tăng Cường (Vừa kết thúc hoặc đang chạy)
             if (session.mode === 'reinforced') {
-                if (result) { 
-                    // result ở đây có thể là 'present' (nếu chưa end session) hoặc 'absent' (nếu đã end session và bị đánh vắng)
-                    // Tuy nhiên để hiển thị realtime khi đang chạy monitor:
-                    if (session.active) {
-                         if (sessionLog) {
-                            status = 'present';
-                            checkInTime = sessionLog.checkInTime;
-                        } else {
-                            status = 'missing'; // Đang thiếu, chưa quét
-                            checkInTime = result.firstCheckIn;
-                        }
+                // Logic hiển thị cho Tăng cường
+                if (result) {
+                    // Nếu có Log quét lần này -> Có mặt
+                    if (sessionLog) {
+                        status = 'present';
+                        checkInTime = sessionLog.checkInTime;
                     } else {
-                        // Session đã đóng: Dựa hoàn toàn vào Result (đã được update bởi hàm endSession)
-                        status = result.status; // 'present' hoặc 'absent'
-                        checkInTime = result.firstCheckIn;
-                        
-                        // Fallback: Nếu logic endSession chưa chạy xong hoặc lỗi, hiển thị dựa vào log
-                        if (result.status === 'present' && !sessionLog) {
-                             status = 'missing'; // Đã kết thúc mà vẫn present nhưng không có log -> Anomalies
-                        }
+                        // Nếu có Result (đã đi học trước đó) nhưng KHÔNG có Log lần này -> Thiếu (Missing)
+                        // Bất kể trong DB Result đang là 'present' hay đã bị update thành 'absent'
+                        // Ở màn hình này, chúng ta muốn nhấn mạnh việc họ bị "Rớt" ở phiên này
+                        status = 'missing'; 
+                        checkInTime = result.firstCheckIn; // Hiển thị giờ vào lần đầu để đối chiếu
                     }
                 } else {
-                    status = 'absent';
+                    status = 'absent'; // Vắng từ đầu
                 }
             } else {
-                // Standard / History
+                // Standard: Chỉ cần có kết quả là Present (kể cả xem lại lịch sử)
                 if (result) {
-                    status = result.status;
+                    status = result.status; 
                     checkInTime = result.firstCheckIn;
                 }
             }
@@ -292,7 +280,7 @@ const getSessionReport = async (req, res) => {
             return {
                 userId: student.userId,
                 fullName: student.fullName,
-                status: status,
+                status: status, // present, missing, absent
                 checkInTime: checkInTime
             };
         });
