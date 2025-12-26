@@ -24,14 +24,36 @@ const getTeacherClasses = async (req, res) => {
         .sort({ createdAt: -1 }) // Sắp xếp mới nhất lên đầu để lấy phiên gần nhất
         .lean();
 
+    // --- DEBUG LOGS (Xem trong Terminal Server) ---
+    console.log(`[DEBUG] Teacher: ${req.user.userId}`);
+    console.log(`[DEBUG] Total Classes found: ${classes.length}`);
+    console.log(`[DEBUG] Total Sessions found in DB for these classes: ${sessions.length}`);
+    if (sessions.length > 0) {
+        console.log('[DEBUG] Sample Session Data:', {
+            id: sessions[0]._id,
+            class: sessions[0].class, // Mong đợi là ObjectId
+            lessonId: sessions[0].lessonId,
+            sessionId: sessions[0].sessionId
+        });
+    }
+    // ----------------------------------------------
+
     // 4. Map session mới nhất vào từng lesson tương ứng
     const result = classes.map(cls => {
+        // Chuyển đổi ID lớp hiện tại sang String chuẩn để so sánh
+        const classIdStr = cls._id.toString(); 
+
         const enrichedLessons = cls.lessons.map(lesson => {
-            // SỬA LỖI: Chuyển đổi về String để so sánh chính xác ObjectId và String
-            const latestSession = sessions.find(s => 
-                String(s.class) === String(cls._id) && 
-                String(s.lessonId) === String(lesson.lessonId)
-            );
+            const lessonIdStr = lesson.lessonId.toString();
+
+            // Tìm session khớp classId và lessonId trong danh sách sessions đã lấy
+            const latestSession = sessions.find(s => {
+                // Kiểm tra an toàn và convert sang string
+                const sClassStr = s.class ? s.class.toString() : '';
+                const sLessonStr = s.lessonId ? s.lessonId.toString() : '';
+                
+                return sClassStr === classIdStr && sLessonStr === lessonIdStr;
+            });
 
             return {
                 ...lesson,
