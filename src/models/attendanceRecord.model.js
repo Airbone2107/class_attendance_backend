@@ -1,17 +1,15 @@
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 
+// Model này bây giờ đóng vai trò là "LOG CHI TIẾT" (Attendance Log)
+// Lưu lại sự kiện sinh viên đã tham gia vào một SESSION cụ thể
 const attendanceRecordSchema = new Schema({
   student: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  
-  // Link tới Session đã tạo record này
-  session: { type: Schema.Types.ObjectId, ref: 'Session' }, 
+  session: { type: Schema.Types.ObjectId, ref: 'Session', required: true }, 
 
-  // Trường hợp 1: Điểm danh lớp học
+  // Các trường tham chiếu để dễ query, nhưng logic chính dựa vào session
   class: { type: Schema.Types.ObjectId, ref: 'Class' },
   lessonId: { type: String }, 
-
-  // Trường hợp 2: Điểm danh thi (Mới)
   exam: { type: Schema.Types.ObjectId, ref: 'Exam' },
 
   status: { type: String, enum: ['present', 'late', 'absent'], default: 'present' },
@@ -19,19 +17,8 @@ const attendanceRecordSchema = new Schema({
   checkInTime: { type: Date, default: Date.now }
 }, { timestamps: true });
 
-// CẬP NHẬT: Sử dụng partialFilterExpression để tránh lỗi duplicate key khi trường đó là null
-// Index cũ (sparse: true) vẫn đánh index nếu có field student, dẫn đến trùng lặp (student + null)
-
-// 1. Đảm bảo sinh viên chỉ điểm danh 1 lần cho 1 lesson (Chỉ khi có class)
-attendanceRecordSchema.index(
-    { student: 1, class: 1, lessonId: 1 }, 
-    { unique: true, partialFilterExpression: { class: { $exists: true } } }
-);
-
-// 2. Đảm bảo sinh viên chỉ điểm danh 1 lần cho 1 exam (Chỉ khi có exam)
-attendanceRecordSchema.index(
-    { student: 1, exam: 1 }, 
-    { unique: true, partialFilterExpression: { exam: { $exists: true } } }
-);
+// QUAN TRỌNG: Chỉ đảm bảo mỗi SV chỉ check-in 1 lần TRONG 1 SESSION
+// Bỏ index unique theo lessonId để cho phép check-in nhiều lần (tăng cường) trong cùng 1 buổi học
+attendanceRecordSchema.index({ student: 1, session: 1 }, { unique: true });
 
 module.exports = mongoose.model('AttendanceRecord', attendanceRecordSchema);
