@@ -3,6 +3,7 @@ const User = require('../models/user.model');
 const Class = require('../models/class.model');
 const Session = require('../models/session.model');
 const AttendanceRecord = require('../models/attendanceRecord.model');
+const AttendanceResult = require('../models/attendanceResult.model'); // MỚI
 const Exam = require('../models/exam.model'); 
 const { users, classes, exams } = require('../data/mockData'); 
 const bcrypt = require('bcryptjs');
@@ -16,9 +17,13 @@ const resetDb = async (req, res) => {
     await Class.deleteMany({});
     await Session.deleteMany({});
     await AttendanceRecord.deleteMany({});
+    await AttendanceResult.deleteMany({}); // MỚI
     await Exam.deleteMany({});
 
-    await AttendanceRecord.syncIndexes();
+    // Drop indexes để tránh lỗi khi thay đổi schema
+    await AttendanceRecord.collection.dropIndexes();
+    await AttendanceResult.createIndexes();
+    await AttendanceRecord.createIndexes();
 
     console.log('[DEBUG] Database Cleared');
     res.status(200).json({ message: 'Database cleared successfully.' });
@@ -39,9 +44,8 @@ const seedDb = async (req, res) => {
     await Class.deleteMany({});
     await Session.deleteMany({});
     await AttendanceRecord.deleteMany({});
+    await AttendanceResult.deleteMany({}); // MỚI
     await Exam.deleteMany({});
-
-    await AttendanceRecord.syncIndexes();
 
     // 2. Hash password cho users
     const salt = await bcrypt.genSalt(10);
@@ -52,21 +56,17 @@ const seedDb = async (req, res) => {
 
     // 3. Tạo Users
     const createdUsers = await User.insertMany(hashedUsers);
-    console.log(`[DEBUG] Created ${createdUsers.length} users`);
-
-    // 4. Map lại ID user thật
+    
     const teacher = createdUsers.find(u => u.userId === 'gv001');
-    const studentA = createdUsers.find(u => u.userId === 'sv001'); // SV chính
+    const studentA = createdUsers.find(u => u.userId === 'sv001');
     const allStudents = createdUsers.filter(u => u.role === 'student').map(u => u._id);
 
-    // 5. Chuẩn bị dữ liệu Classes và Exams
-    // Chuyển đổi sang object thuần để tránh vấn đề với Mongoose Document trong vòng lặp sau này
+    // 4. Tạo Classes và Exams
     const insertedClasses = await Class.insertMany(classes.map(c => ({
         ...c,
         teacher: teacher._id,
         students: allStudents
     })));
-    console.log(`[DEBUG] Created ${insertedClasses.length} classes`);
 
     const insertedExams = await Exam.insertMany(exams.map(e => ({
         ...e,
@@ -74,67 +74,67 @@ const seedDb = async (req, res) => {
         students: [studentA._id]
     })));
 
-    // 6. Tạo dữ liệu điểm danh ngẫu nhiên & TẠO SESSION
-    const attendanceRecords = [];
+    // 5. Tạo dữ liệu điểm danh ngẫu nhiên
+    const attendanceLogs = [];
+    const attendanceResults = [];
     const mockSessions = [];
     const now = new Date();
 
     for (const cls of insertedClasses) {
-        // Nếu insertedClasses là Mongoose Document, truy cập .lessons trực tiếp vẫn ổn
-        // Nhưng để chắc chắn, ta dùng cls.toObject() nếu cần, hoặc truy cập thẳng.
-        // Ở đây cls là document trả về từ insertMany.
-        
         for (const lesson of cls.lessons) {
             const lessonDate = new Date(lesson.date);
             
-            // SỬA LỖI: Kiểm tra ngày giờ thay vì flag isFinished
-            // Nếu buổi học ở quá khứ => Tạo Session cũ + Điểm danh
             if (lessonDate < now) {
-                
                 const sessionId = randomBytes(4).toString('hex').toUpperCase();
                 
-                // Tạo Session giả cho buổi học cũ
+                // Session cũ
                 const sessionMock = new Session({
                     sessionId: sessionId,
                     class: cls._id,
                     lessonId: lesson.lessonId, 
                     level: 1,
                     mode: 'standard',
-                    active: false, // Session cũ đã đóng
-                    createdAt: new Date(lessonDate.getTime() + 60 * 60 * 1000) // Tạo sau giờ học 1 tiếng
+                    active: false,
+                    createdAt: new Date(lessonDate.getTime() + 60 * 60 * 1000)
                 });
                 mockSessions.push(sessionMock);
 
-                // Tạo record điểm danh ngẫu nhiên cho SV chính
-                const isPresent = Math.random() > 0.3; // 70% đi học
+                // SV chính (sv001) - 70% đi học
+                const isPresent = Math.random() > 0.3; 
                 if (isPresent) {
-                    attendanceRecords.push({
+                    const checkInTime = new Date(lessonDate.getTime() + 15 * 60000);
+                    
+                    // Tạo Log
+                    attendanceLogs.push({
                         student: studentA._id,
                         class: cls._id,
-                        session: sessionMock._id, // Link tới session vừa tạo
+                        session: sessionMock._id,
                         lessonId: lesson.lessonId,
                         status: 'present',
                         method: Math.random() > 0.5 ? 'qr' : 'nfc',
-                        checkInTime: new Date(lessonDate.getTime() + 15 * 60000)
+                        checkInTime: checkInTime
+                    });
+
+                    // Tạo Result
+                    attendanceResults.push({
+                        student: studentA._id,
+                        class: cls._id,
+                        lessonId: lesson.lessonId,
+                        status: 'present',
+                        firstCheckIn: checkInTime,
+                        lastCheckIn: checkInTime,
+                        checkInCount: 1
                     });
                 }
             }
         }
     }
 
-    console.log(`[DEBUG] Preparing to insert ${mockSessions.length} sessions...`);
+    if (mockSessions.length > 0) await Session.insertMany(mockSessions);
+    if (attendanceLogs.length > 0) await AttendanceRecord.insertMany(attendanceLogs);
+    if (attendanceResults.length > 0) await AttendanceResult.insertMany(attendanceResults);
 
-    if (mockSessions.length > 0) {
-        await Session.insertMany(mockSessions);
-        console.log(`[DEBUG] Inserted ${mockSessions.length} sessions successfully`);
-    } else {
-        console.log('[DEBUG] WARNING: No past lessons found to create sessions for.');
-    }
-
-    if (attendanceRecords.length > 0) {
-        await AttendanceRecord.insertMany(attendanceRecords);
-        console.log(`[DEBUG] Inserted ${attendanceRecords.length} attendance records`);
-    }
+    console.log(`[DEBUG] Seeded: ${mockSessions.length} sessions, ${attendanceLogs.length} logs, ${attendanceResults.length} results`);
 
     res.status(201).json({
       message: 'Database seeded successfully.',
@@ -142,7 +142,8 @@ const seedDb = async (req, res) => {
         users: createdUsers.length,
         classes: insertedClasses.length,
         sessions: mockSessions.length,
-        records: attendanceRecords.length
+        logs: attendanceLogs.length,
+        results: attendanceResults.length
       }
     });
   } catch (error) {
