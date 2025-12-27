@@ -69,7 +69,7 @@ const seedDb = async (req, res) => {
     // Tạo thêm 1 lớp học đặc biệt diễn ra HÔM NAY
     const specialClass = {
         classId: 'TODAY101',
-        className: 'Lớp Demo Hôm Nay (Auto Generated)',
+        className: 'Lớp Demo Hôm Nay',
         credits: 2,
         group: '01',
         teacher: teacher._id,
