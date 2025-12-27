@@ -29,7 +29,7 @@ function cosineSimilarity(vec1, vec2) {
     return dotProduct;
 }
 
-const COSINE_MATCH_THRESHOLD = 0.92;
+const COSINE_MATCH_THRESHOLD = 0.9;
 
 async function findExistingResult(studentId, session) {
     let filter = { student: studentId };
