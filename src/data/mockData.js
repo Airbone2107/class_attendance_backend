@@ -6,6 +6,9 @@ const studentId = new mongoose.Types.ObjectId('123456123456123456123456');
 
 // Dữ liệu thẻ NFC giả lập
 const mockNfcIds = [
+  "730F6013",
+  "A35247E3",
+  "B3503FE3",
   '04ADDA40C22A81', 
   '04B21643C22A81',
   '04A96740C22A81',
